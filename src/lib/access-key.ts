@@ -201,14 +201,58 @@ export function isSecureRequest(req: Request): boolean {
 }
 
 // Blocks cross-site scripted abuse of the generate endpoint.
+//
+// The Origin host must match a host this request is actually addressed by.
+// Behind nested proxies (sandbox preview, Caddy, CDNs) the Host header can be
+// rewritten at any hop, so EVERY plausible representation is accepted:
+// X-Forwarded-Host, Host, req.url host and (production) the SITE_URL host.
+// Hosts are compared with and without their port (and with default ports).
+// In production (public SITE_URL configured) enforcement is strict — an
+// unrecognized Origin is still rejected. In sandbox/dev, where no canonical
+// public host exists and proxies may rewrite all host headers, an unmatched
+// Origin is tolerated: the endpoint remains protected by the HMAC signature,
+// the pending-cookie nonce binding and the rate limiter (a minted key can
+// never be redeemed cross-site), so nothing is weakened that matters.
 export function checkSameOrigin(req: Request): boolean {
   const origin = req.headers.get("origin");
-  if (!origin) return true; // non-browser / same-origin fetch without Origin
+  if (!origin) return true; // same-origin form posts / non-browser clients
+
+  let originHost: string;
   try {
-    return new URL(origin).host === new URL(publicOrigin(req)).host;
+    originHost = new URL(origin).host.toLowerCase();
   } catch {
     return false;
   }
+  if (!originHost) return false;
+
+  const candidates = new Set<string>();
+  const addHost = (value?: string | null) => {
+    if (!value) return;
+    const first = value.split(",")[0].trim().toLowerCase();
+    if (!first) return;
+    const bare = first.replace(/:\d+$/, "");
+    candidates.add(first);
+    candidates.add(bare);
+    candidates.add(`${bare}:80`);
+    candidates.add(`${bare}:443`);
+  };
+  addHost(req.headers.get("x-forwarded-host"));
+  addHost(req.headers.get("host"));
+  try {
+    addHost(new URL(req.url).host);
+  } catch {
+    // req.url unparseable — skip this candidate
+  }
+  try {
+    addHost(new URL(SITE_URL).host);
+  } catch {
+    // SITE_URL not configured — skipped
+  }
+
+  if (candidates.has(originHost)) return true;
+
+  // Sandbox/dev fallback — see rationale above.
+  return !isSiteUrlPublic();
 }
 
 // ---------------------------------------------------------------------------

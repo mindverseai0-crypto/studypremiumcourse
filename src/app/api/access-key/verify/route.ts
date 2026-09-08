@@ -12,6 +12,7 @@ import {
   buildSessionToken,
   clearCookie,
   PENDING_COOKIE,
+  publicOrigin,
   setSessionCookie,
 } from "@/lib/access-key";
 
@@ -21,7 +22,7 @@ export const runtime = "nodejs";
 function redirectWithCookies(req: NextRequest, location: string, sid?: string) {
   // 302 with a RELATIVE Location so the browser stays on its current origin
   // (behind the gateway/proxy the internal request origin is not reachable).
-  const secure = req.headers.get("x-forwarded-proto") === "https";
+  const secure = publicOrigin(req).startsWith("https://");
   const res = new NextResponse(null, { status: 302, headers: { Location: location } });
 
   if (sid) {

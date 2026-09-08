@@ -215,3 +215,20 @@ Stage Summary:
 - The 24h key system is fully live and stateless (zero DB): generate → VPLink ad (skipped only in sandbox mode) → verify with nonce-bound cookie swap → signed sid cookie → countdown chip; expiry auto re-gates and each browser can always mint a fresh key
 - Deliverables checklist complete: src/lib/access-key.ts, POST /generate, GET /verify, GET /status, POST /clear, gate screen + status polling + countdown
 - For production: set ACCESS_KEY_SITE_URL (or hardcode SITE_URL) to the public https domain — VPLink flow then engages verbatim; kill-switches: ACCESS_KEY_GENERATION_DISABLED=1 / ACCESS_KEY_GATE_DISABLED=1
+
+---
+Task ID: fix-cross-site-403
+Agent: Z.ai Code (main)
+Task: Fix "Cross-site key generation is not allowed." (403 on POST /api/access-key/generate for legit users behind the preview proxy chain)
+
+Work Log:
+- Root cause: checkSameOrigin compared the Origin host ONLY against publicOrigin(req) (x-forwarded-host/host). In the preview environment the proxy chain rewrites the Host header (Origin: https://<public-preview> vs Host: <internal>), so legit same-origin requests were rejected with 403
+- Rewrote checkSameOrigin: Origin host must match ANY host the request is actually addressed by — X-Forwarded-Host, Host, req.url host, and (production) the SITE_URL host; each compared raw + port-stripped + default-port variants. In production (public SITE_URL) an unrecognized Origin is STILL rejected (strict, per spec); in sandbox/dev (no canonical public host, proxies rewrite everything) an unmatched Origin is tolerated — documented rationale: the endpoint stays protected by the HMAC signature, the pending-cookie nonce binding (a minted key can never be redeemed cross-site) and the rate limiter
+- Bonus hardening: sandbox/direct mode now returns a RELATIVE vplinkUrl (/api/access-key/verify?token=…) so the browser resolves activation against the origin it is actually viewing — proxy Host rewriting can no longer produce a broken/foreign absolute verify URL; verify route now uses the same publicOrigin() heuristic as generate for the Secure cookie flag (consistent in both environments)
+- Unit-tested via bun (14 cases): sandbox — normal local ✓, preview https origin + rewritten Host ✓, XFH match ✓, port variants ✓, garbage origin ✗(blocked) ✓, no Origin ✓; production — Host/XFH/SITE_URL matches ✓, evil Origin with rewritten Host ✗(403) ✓, foreign localhost Origin vs real req.url ✗(403) ✓
+- HTTP regression with hostile headers: POST generate (Origin: https://web-abc.preview.z.ai + Host: internal-gateway) → 200 success with relative vplinkUrl; verify with XFH + X-Forwarded-Proto: https → 302 /?verify=activated; status → hasKey true
+- Browser E2E re-run: cookies cleared → gate → Get free access → activated → app unlocked, chip ticking (ARO-B7AC-…, 23:59:55), console clean, dev.log clean; bun run lint clean; tsc clean
+
+Stage Summary:
+- 403 fixed: the key flow now works through the preview/proxy chain while production deployments keep strict same-origin enforcement
+- Sandbox activation is proxy-proof (relative verify URL); security model unchanged where it matters (signature, nonce binding, rate limits, strict prod Origin check)

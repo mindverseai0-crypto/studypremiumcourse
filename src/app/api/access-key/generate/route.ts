@@ -83,9 +83,12 @@ export async function POST(req: NextRequest) {
       vplinkUrl = short;
       mode = "vplink";
     } else {
-      const verifyUrl = new URL("/api/access-key/verify", publicOrigin(req));
-      verifyUrl.searchParams.set("token", token);
-      vplinkUrl = verifyUrl.toString();
+      // Sandbox/dev: return a RELATIVE verify URL. The browser resolves it
+      // against the origin it is actually viewing the site on, so nested
+      // preview proxies that rewrite Host/X-Forwarded-* can never produce a
+      // broken or foreign absolute URL. Same-origin by construction; all
+      // security checks still apply at the verify endpoint.
+      vplinkUrl = `/api/access-key/verify?token=${encodeURIComponent(token)}`;
       mode = "direct";
       devNote =
         "SITE_URL is not configured for a public domain — running in sandbox mode: the ad-gateway step is skipped and activation completes directly. All security checks still apply.";
