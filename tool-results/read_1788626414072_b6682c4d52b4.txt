@@ -1,0 +1,872 @@
+     1→     1→// ============================================================================
+     2→     2→// StudyBee content engine — deterministic generator for batch details,
+     3→     3→// subjects, chapters, content, tests, notifications & video payloads.
+     4→     4→// Mirrors the data shapes of the original PW-style API used by the site.
+     5→     5→// ============================================================================
+     6→     6→
+     7→     7→import {
+     8→     8→  CHAPTER_BANKS,
+     9→     9→  CLASS_LEVELS,
+    10→    10→  TEACHER_POOL,
+    11→    11→  classifyBatch,
+    12→    12→  DEMO_VIDEOS,
+    13→    13→} from '@/data/syllabus';
+    14→    14→
+    15→    15→// ---------------------------------------------------------------------------
+    16→    16→// Deterministic hashing / RNG
+    17→    17→// ---------------------------------------------------------------------------
+    18→    18→export function hashString(str: string): number {
+    19→    19→  let h = 2166136261;
+    20→    20→  for (let i = 0; i < str.length; i++) {
+    21→    21→    h ^= str.charCodeAt(i);
+    22→    22→    h = Math.imul(h, 16777619);
+    23→    23→  }
+    24→    24→  return h >>> 0;
+    25→    25→}
+    26→    26→
+    27→    27→export function makeRng(seed: string): () => number {
+    28→    28→  let a = hashString(seed);
+    29→    29→  return function () {
+    30→    30→    a |= 0;
+    31→    31→    a = (a + 0x6d2b79f5) | 0;
+    32→    32→    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    33→    33→    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    34→    34→    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    35→    35→  };
+    36→    36→}
+    37→    37→
+    38→    38→function pick<T>(rng: () => number, arr: T[]): T {
+    39→    39→  return arr[Math.floor(rng() * arr.length)];
+    40→    40→}
+    41→    41→
+    42→    42→// ---------------------------------------------------------------------------
+    43→    43→// Types (API shapes)
+    44→    44→// ---------------------------------------------------------------------------
+    45→    45→export interface ImageRef {
+    46→    46→  baseUrl: string;
+    47→    47→  key: string;
+    48→    48→}
+    49→    49→
+    50→    50→export interface TeacherPublic {
+    51→    51→  _id: string;
+    52→    52→  firstName: string;
+    53→    53→  lastName: string;
+    54→    54→  subject: string;
+    55→    55→  experience: number;
+    56→    56→  qualification: string;
+    57→    57→  featuredLine: string;
+    58→    58→  tags: string[];
+    59→    59→  about: string;
+    60→    60→  imageId: ImageRef;
+    61→    61→}
+    62→    62→
+    63→    63→export interface BatchSubject {
+    64→    64→  _id: string;
+    65→    65→  subject: string;
+    66→    66→  subjectId: string;
+    67→    67→  teacherIds: TeacherPublic[];
+    68→    68→}
+    69→    69→
+    70→    70→export interface BatchDetail {
+    71→    71→  _id: string;
+    72→    72→  id: string;
+    73→    73→  name: string;
+    74→    74→  previewImage: ImageRef;
+    75→    75→  description: string;
+    76→    76→  shortDescription: string;
+    77→    77→  price: number;
+    78→    78→  discount: number;
+    79→    79→  validity: string;
+    80→    80→  startDate: string;
+    81→    81→  endDate: string;
+    82→    82→  class: { name: string; _id: string };
+    83→    83→  subjects: BatchSubject[];
+    84→    84→  channelId: string;
+    85→    85→  facultyChannelId: string;
+    86→    86→  cohortId: string;
+    87→    87→}
+    88→    88→
+    89→    89→export interface ChapterItem {
+    90→    90→  _id: string;
+    91→    91→  name: string;
+    92→    92→  typeId: string;
+    93→    93→  notes: number;
+    94→    94→  videos: number;
+    95→    95→  order: number;
+    96→    96→}
+    97→    97→
+    98→    98→export interface ContentNode {
+    99→    99→  _id: string;
+   100→   100→  type: 'LECTURE' | 'NOTES' | 'DPP_PDF' | 'DPP_VIDEOS' | 'DPP_QUIZ';
+   101→   101→  data: Record<string, unknown>;
+   102→   102→}
+   103→   103→
+   104→   104→export interface TestItem {
+   105→   105→  _id: string;
+   106→   106→  name: string;
+   107→   107→  totalQuestions: number;
+   108→   108→  totalMarks: number;
+   109→   109→  duration: number;
+   110→   110→  testActivityStatus: string;
+   111→   111→  testStudentMapping: { _id: string; testActivityStatus: string } | null;
+   112→   112→  dppQuizDetails?: {
+   113→   113→    contentId: string;
+   114→   114→    scheduleId: string;
+   115→   115→    test: { _id: string; name: string; totalQuestions: number; totalMarks: number };
+   116→   116→    testStudentMapping: Record<string, unknown>;
+   117→   117→  };
+   118→   118→}
+   119→   119→
+   120→   120→export interface NotificationItem {
+   121→   121→  _id: string;
+   122→   122→  type: string;
+   123→   123→  heading: string;
+   124→   124→  announcement: string;
+   125→   125→  scheduleTime: string;
+   126→   126→  isRead: boolean;
+   127→   127→  attachment: ImageRef | null;
+   128→   128→}
+   129→   129→
+   130→   130→// ---------------------------------------------------------------------------
+   131→   131→// Catalog
+   132→   132→// ---------------------------------------------------------------------------
+   133→   133→import catalogRaw from '@/data/all_batches.json';
+   134→   134→
+   135→   135→export interface CatalogBatch {
+   136→   136→  _id: string;
+   137→   137→  id: string;
+   138→   138→  name: string;
+   139→   139→  imageUrl?: string;
+   140→   140→  previewImage?: string;
+   141→   141→}
+   142→   142→
+   143→   143→export const BATCH_CATALOG: CatalogBatch[] = (Array.isArray(catalogRaw)
+   144→   144→  ? catalogRaw
+   145→   145→  : (catalogRaw as { data?: CatalogBatch[] }).data || []
+   146→   146→).map((b: Record<string, any>) => ({
+   147→   147→  _id: b.id || b._id,
+   148→   148→  id: b.id || b._id,
+   149→   149→  name: b.name,
+   150→   150→  imageUrl: b.imageUrl,
+   151→   151→  previewImage: b.imageUrl || b.previewImage,
+   152→   152→}));
+   153→   153→
+   154→   154→export const BLOCKED_BATCH_NAMES = ['arjuna jee 2027.', ''];
+   155→   155→
+   156→   156→export function searchCatalog(query: string, page: number, limit: number) {
+   157→   157→  const q = (query || '').toLowerCase().trim();
+   158→   158→  const filtered = BATCH_CATALOG.filter((b) => {
+   159→   159→    const bName = (b.name || '').toLowerCase().trim();
+   160→   160→    const bId = (b._id || '').toLowerCase();
+   161→   161→    if (BLOCKED_BATCH_NAMES.includes(bName)) return false;
+   162→   162→    if (!q) return true;
+   163→   163→    return bName.includes(q) || bId === q;
+   164→   164→  });
+   165→   165→  const offset = (page - 1) * limit;
+   166→   166→  return {
+   167→   167→    total: filtered.length,
+   168→   168→    page,
+   169→   169→    limit,
+   170→   170→    data: filtered.slice(offset, offset + limit),
+   171→   171→    hasMore: (page * limit) < filtered.length,
+   172→   172→  };
+   173→   173→}
+   174→   174→
+   175→   175→// ---------------------------------------------------------------------------
+   176→   176→// Image helpers
+   177→   177→// ---------------------------------------------------------------------------
+   178→   178→const PW_STATIC = 'https://static.pw.live/';
+   179→   179→
+   180→   180→function imageRefFromUrl(url?: string | null): ImageRef {
+   181→   181→  if (!url || url.trim() === '') {
+   182→   182→    return { baseUrl: 'https://store.pw.live/', key: 'footer-logo.svg' };
+   183→   183→  }
+   184→   184→  if (url.startsWith(PW_STATIC)) {
+   185→   185→    return { baseUrl: PW_STATIC, key: url.slice(PW_STATIC.length) };
+   186→   186→  }
+   187→   187→  // Non-PW urls: keep absolute in key, empty base
+   188→   188→  return { baseUrl: '', key: url };
+   189→   189→}
+   190→   190→
+   191→   191→export function imageUrlOf(ref?: ImageRef | string | null): string {
+   192→   192→  if (!ref) return 'https://store.pw.live/footer-logo.svg';
+   193→   193→  if (typeof ref === 'string') return ref;
+   194→   194→  const url = (ref.baseUrl || '') + (ref.key || '');
+   195→   195→  if (!url) return 'https://store.pw.live/footer-logo.svg';
+   196→   196→  if (url.startsWith('http')) return url;
+   197→   197→  return PW_STATIC + url;
+   198→   198→}
+   199→   199→
+   200→   200→function teacherAvatar(teacherId: string): ImageRef {
+   201→   201→  return {
+   202→   202→    baseUrl: '',
+   203→   203→    key: `https://ui-avatars.com/api/?background=111827&color=FFB800&bold=true&name=${teacherId.slice(-6)}`,
+   204→   204→  };
+   205→   205→}
+   206→   206→
+   207→   207→// ---------------------------------------------------------------------------
+   208→   208→// Subject / teacher resolution
+   209→   209→// ---------------------------------------------------------------------------
+   210→   210→const subjectCache = new Map<string, BatchSubject[]>();
+   211→   211→
+   212→   212→function pickTeachersFor(subject: string, batchId: string): TeacherPublic[] {
+   213→   213→  const pool = TEACHER_POOL[subject] || TEACHER_POOL.General;
+   214→   214→  const rng = makeRng(`teachers_${batchId}_${subject}`);
+   215→   215→  const count = Math.min(pool.length, 1 + Math.floor(rng() * 2));
+   216→   216→  const chosen: TeacherSeedLike[] = [];
+   217→   217→  const used = new Set<number>();
+   218→   218→  while (chosen.length < count && used.size < pool.length) {
+   219→   219→    const idx = Math.floor(rng() * pool.length);
+   220→   220→    if (used.has(idx)) continue;
+   221→   221→    used.add(idx);
+   222→   222→    chosen.push(pool[idx]);
+   223→   223→  }
+   224→   224→  return chosen.map((t, i) => {
+   225→   225→    const tid = `tchr_${hashString(batchId + subject + t.name).toString(36)}`;
+   226→   226→    return {
+   227→   227→      _id: tid,
+   228→   228→      firstName: t.name.split(' ')[0],
+   229→   229→      lastName: t.name.split(' ').slice(1).join(' '),
+   230→   230→      subject,
+   231→   231→      experience: t.exp,
+   232→   232→      qualification: t.qual,
+   233→   233→      featuredLine: t.line,
+   234→   234→      tags: t.tags,
+   235→   235→      about: `${t.name} is one of the most loved ${subject} faculty, known for making concepts crystal clear with in-depth explanations, exam-oriented problem solving and regular mentoring sessions. Over ${t.exp} years of teaching experience has helped thousands of students crack competitive & board exams.`,
+   236→   236→      imageId: teacherAvatar(tid + i),
+   237→   237→    };
+   238→   238→  });
+   239→   239→}
+   240→   240→
+   241→   241→interface TeacherSeedLike {
+   242→   242→  name: string;
+   243→   243→  exp: number;
+   244→   244→  qual: string;
+   245→   245→  line: string;
+   246→   246→  tags: string[];
+   247→   247→}
+   248→   248→
+   249→   249→export function getSubjects(batchId: string, batchName: string): BatchSubject[] {
+   250→   250→  const cacheKey = batchId + '|' + batchName;
+   251→   251→  if (subjectCache.has(cacheKey)) return subjectCache.get(cacheKey)!;
+   252→   252→  const cls = classifyBatch(batchName, (s) => hashString(s));
+   253→   253→  const subjects: BatchSubject[] = cls.subjects.map((sub, i) => {
+   254→   254→    const sid = `sbj_${hashString(batchId + sub).toString(36)}`;
+   255→   255→    return {
+   256→   256→      _id: sid,
+   257→   257→      subject: sub,
+   258→   258→      subjectId: `sint_${hashString('internal_' + batchId + sub).toString(36)}`,
+   259→   259→      teacherIds: pickTeachersFor(sub, batchId),
+   260→   260→      // index used by callers
+   261→   261→      ...(i >= 0 ? {} : {}),
+   262→   262→    };
+   263→   263→  });
+   264→   264→  subjectCache.set(cacheKey, subjects);
+   265→   265→  return subjects;
+   266→   266→}
+   267→   267→
+   268→   268→// ---------------------------------------------------------------------------
+   269→   269→// Batch details
+   270→   270→// ---------------------------------------------------------------------------
+   271→   271→const detailCache = new Map<string, BatchDetail>();
+   272→   272→
+   273→   273→const EXAM_DESC: Record<string, (name: string, cls: string) => string> = {
+   274→   274→  JEE: (name, cls) =>
+   275→   275→    `${name} is a comprehensive ${cls} JEE preparation batch designed by India's top Physics Wallah faculty. The batch covers the complete syllabus of Physics, Chemistry & Mathematics with detailed concept lectures, NCERT line-by-line coverage, DPPs, chapter-wise tests, and full-length mock tests modelled on the latest JEE Main & Advanced pattern. Structured study planners, doubt-solving sessions and mentorship ensure you stay on the path to a top IIT.`,
+   276→   276→  NEET: (name, cls) =>
+   277→   277→    `${name} is a complete ${cls} NEET-UG preparation program crafted by India's finest Biology, Physics & Chemistry educators. Learn NCERT line-by-line with high-yield lectures, daily practice problems, chapter tests and full syllabus mocks following the latest NTA pattern. Includes printed & digital notes, mind maps, and continuous mentor support for your MBBS dream.`,
+   278→   278→  BOARDS: (name, cls) =>
+   279→   279→    `${name} is a complete ${cls} board-exam preparation batch covering Science, Mathematics, Social Science & English as per the latest CBSE syllabus. Every chapter includes detailed lectures, NCERT solutions, revision notes, DPPs and sample-paper practice to help you score 95%+ in boards with confidence.`,
+   280→   280→  COMMERCE: (name, cls) =>
+   281→   281→    `${name} is a specialised ${cls} Commerce batch covering Accountancy, Business Studies & Economics with concept-first teaching, practical problem solving, case studies and board-oriented revision. Perfect for Class 11/12 commerce students targeting 95%+ in boards and a strong base for CA/CS/CUET.`,
+   282→   282→  HUMANITIES: (name, cls) =>
+   283→   283→    `${name} is a dedicated ${cls} Humanities program covering History, Political Science, Geography & more with answer-writing skills, source-based practice and CUET-oriented preparation. Designed for toppers aiming at both boards and competitive entrances.`,
+   284→   284→  BANKING: (name) =>
+   285→   285→    `${name} is a focused banking professional course with complete conceptual coverage, case-study based learning, MCQ practice sets and mock tests aligned to the latest exam pattern. Ideal for working bankers preparing along with job commitments.`,
+   286→   286→  FOUNDATION: (name, cls) =>
+   287→   287→    `${name} is a strong foundation program for ${cls} students covering Science, Mathematics, Social Science & English with interactive lectures, activities, practice worksheets and regular assessments to build rock-solid basics for future competitive exams.`,
+   288→   288→  GENERAL: (name, cls) =>
+   289→   289→    `${name} is a structured ${cls} learning program with expert faculty, detailed lectures, practice material and regular tests — everything you need to master the syllabus and ace your exams.`,
+   290→   290→};
+   291→   291→
+   292→   292→export function getBatchDetail(batchId: string): BatchDetail | null {
+   293→   293→  if (detailCache.has(batchId)) return detailCache.get(batchId)!;
+   294→   294→  const cat = BATCH_CATALOG.find((b) => b._id === batchId);
+   295→   295→  if (!cat) return null;
+   296→   296→  const rng = makeRng('detail_' + batchId);
+   297→   297→  const cls = classifyBatch(cat.name, (s) => hashString(s));
+   298→   298→  const yearMatch = cat.name.match(/20\d{2}/);
+   299→   299→  const year = yearMatch ? parseInt(yearMatch[0]) : new Date().getFullYear() + 1;
+   300→   300→  const startYear = year - 1;
+   301→   301→  const price = Math.floor(rng() * 45) * 100 + 1200;
+   302→   302→  const discount = price > 1500 ? Math.floor(rng() * 20) * 100 + 500 : 0;
+   303→   303→
+   304→   304→  const descFn = EXAM_DESC[cls.exam] || EXAM_DESC.GENERAL;
+   305→   305→  const detail: BatchDetail = {
+   306→   306→    _id: cat._id,
+   307→   307→    id: cat._id,
+   308→   308→    name: cat.name,
+   309→   309→    previewImage: imageRefFromUrl(cat.imageUrl || cat.previewImage),
+   310→   310→    description: descFn(cat.name, cls.classLevel || 'exam'),
+   311→   311→    shortDescription: descFn(cat.name, cls.classLevel || 'exam').slice(0, 120) + '…',
+   312→   312→    price,
+   313→   313→    discount,
+   314→   314→    validity: cls.exam === 'BANKING' ? '6 Months' : 'Till Exams',
+   315→   315→    startDate: new Date(`${startYear}-04-20T00:00:00Z`).toISOString(),
+   316→   316→    endDate: new Date(`${year}-06-15T00:00:00Z`).toISOString(),
+   317→   317→    class: {
+   318→   318→      name: cls.classLevel || CLASS_LEVELS[hashString(batchId) % CLASS_LEVELS.length],
+   319→   319→      _id: `cls_${hashString(batchId).toString(36)}`,
+   320→   320→    },
+   321→   321→    subjects: getSubjects(batchId, cat.name),
+   322→   322→    channelId: `ch_${hashString('ch' + batchId).toString(36)}`,
+   323→   323→    facultyChannelId: `fch_${hashString('fch' + batchId).toString(36)}`,
+   324→   324→    cohortId: `coh_${hashString('coh' + batchId).toString(36)}`,
+   325→   325→  };
+   326→   326→  detailCache.set(batchId, detail);
+   327→   327→  return detail;
+   328→   328→}
+   329→   329→
+   330→   330→// ---------------------------------------------------------------------------
+   331→   331→// Chapters & study material
+   332→   332→// ---------------------------------------------------------------------------
+   333→   333→export function getChapters(batchId: string, subjectId: string, tagType: string): ChapterItem[] {
+   334→   334→  const detail = getBatchDetail(batchId);
+   335→   335→  if (!detail) return [];
+   336→   336→  const subject = detail.subjects.find((s) => s._id === subjectId || s.subjectId === subjectId);
+   337→   337→  if (!subject) return [];
+   338→   338→  const bank = classifyBatch(detail.name, (s) => hashString(s)).chaptersFor(subject.subject);
+   339→   339→  const rng = makeRng(`chapters_${batchId}_${subjectId}_${tagType}`);
+   340→   340→  return bank.map((name, i) => ({
+   341→   341→    _id: `chp_${hashString(batchId + subjectId + name).toString(36)}`,
+   342→   342→    name,
+   343→   343→    typeId: `tag_${hashString('tag' + batchId + subjectId + name).toString(36)}`,
+   344→   344→    notes: 2 + Math.floor(rng() * 3),
+   345→   345→    videos: 8 + Math.floor(rng() * 12),
+   346→   346→    order: i + 1,
+   347→   347→  }));
+   348→   348→}
+   349→   349→
+   350→   350→export function getResourceTopics(batchId: string, subjectIdsCsv: string): ChapterItem[] {
+   351→   351→  const detail = getBatchDetail(batchId);
+   352→   352→  if (!detail) return [];
+   353→   353→  const rng = makeRng(`res_${batchId}_${subjectIdsCsv.length}`);
+   354→   354→  const names = [
+   355→   355→    'Formula Handbook & Mind Maps',
+   356→   356→    'NCERT Solutions (Complete)',
+   357→   357→    'Revision Modules',
+   358→   358→    'Previous Year Questions',
+   359→   359→    'Board Sample Papers',
+   360→   360→    'Important Diagrams Collection',
+   361→   361→    'Quick Revision Notes',
+   362→   362→    'Test Series Vault',
+   363→   363→  ];
+   364→   364→  return names.map((name, i) => ({
+   365→   365→    _id: `rtag_${hashString(batchId + name).toString(36)}`,
+   366→   366→    name,
+   367→   367→    typeId: `rtag_${hashString('rtype' + batchId + name).toString(36)}`,
+   368→   368→    notes: 5 + Math.floor(rng() * 20),
+   369→   369→    videos: 3 + Math.floor(rng() * 10),
+   370→   370→    order: i + 1,
+   371→   371→  }));
+   372→   372→}
+   373→   373→
+   374→   374→// ---------------------------------------------------------------------------
+   375→   375→// Content (lectures / notes / dpp pdfs / dpp videos / dpp quizzes)
+   376→   376→// ---------------------------------------------------------------------------
+   377→   377→const LECTURE_STYLES = [
+   378→   378→  (c: string, i: number) => `${c} - Lecture ${String(i).padStart(2, '0')}`,
+   379→   379→  (c: string, i: number) => `${c} - Part ${String(i).padStart(2, '0')} | Complete Concepts`,
+   380→   380→  (c: string, i: number) => `${c} | Lecture ${String(i).padStart(2, '0')} + Practice`,
+   381→   381→];
+   382→   382→
+   383→   383→export function getContentNodes(
+   384→   384→  batchId: string,
+   385→   385→  subjectId: string,
+   386→   386→  tagId: string,
+   387→   387→  contentType: string,
+   388→   388→): ContentNode[] {
+   389→   389→  const detail = getBatchDetail(batchId);
+   390→   390→  if (!detail) return [];
+   391→   391→  const subject = detail.subjects.find((s) => s._id === subjectId || s.subjectId === subjectId);
+   392→   392→  const bank =
+   393→   393→    subject
+   394→   394→      ? classifyBatch(detail.name, (s) => hashString(s)).chaptersFor(subject.subject)
+   395→   395→      : CHAPTER_BANKS.physics12;
+   396→   396→  const chapter = bank.find((c) => `chp_${hashString(batchId + (subject ? subject._id : '') + c).toString(36)}` === tagId)
+   397→   397→    || bank.find((c) => `rtag_${hashString(batchId + c).toString(36)}` === tagId)
+   398→   398→    || null;
+   399→   399→
+   400→   400→  const chapterName = chapter || 'Complete Chapter';
+   401→   401→  const rng = makeRng(`content_${batchId}_${subjectId}_${tagId}_${contentType}`);
+   402→   402→  const lectureCount = 9 + Math.floor(rng() * 5);
+   403→   403→  const lectureStyle = pick(rng, LECTURE_STYLES);
+   404→   404→  const now = Date.now();
+   405→   405→
+   406→   406→  const nodes: ContentNode[] = [];
+   407→   407→
+   408→   408→  const buildLecture = (i: number, type: 'LECTURE' | 'DPP_VIDEOS', title: string): ContentNode => {
+   409→   409→    const vid = `vid_${hashString(`${batchId}_${tagId}_${type}_${i}_${title}`).toString(36)}`;
+   410→   410→    const daysAgo = Math.max(0, lectureCount - i) * 2 + Math.floor(rng() * 2);
+   411→   411→    const date = new Date(now - daysAgo * 86400000).toISOString();
+   412→   412→    const durH = 1 + Math.floor(rng() * 2);
+   413→   413→    const durM = Math.floor(rng() * 60);
+   414→   414→    return {
+   415→   415→      _id: `sch_${hashString(`sch_${batchId}_${tagId}_${type}_${i}_${title}`).toString(36)}`,
+   416→   416→      type,
+   417→   417→      data: {
+   418→   418→        _id: vid,
+   419→   419→        topic: title,
+   420→   420→        name: title,
+   421→   421→        date,
+   422→   422→        videoDetails: {
+   423→   423→          _id: vid,
+   424→   424→          image: `https://picsum.photos/seed/${vid}/480/270`,
+   425→   425→          videoUrl: DEMO_VIDEOS[hashString(vid) % DEMO_VIDEOS.length],
+   426→   426→          duration: `${durH}h ${durM}m`,
+   427→   427→        },
+   428→   428→        homeworkIds: [{ topic: `${title} - Class Notes`, attachmentIds: [noteRef(vid, 'notes')] }],
+   429→   429→        exerciseIds: [],
+   430→   430→        subjectId: subject ? { _id: subject.subjectId } : undefined,
+   431→   431→      },
+   432→   432→    };
+   433→   433→  };
+   434→   434→
+   435→   435→  if (contentType === 'ALL' || contentType === 'LECTURE' || contentType === 'LECTURES') {
+   436→   436→    for (let i = 1; i <= lectureCount; i++) {
+   437→   437→      const title = lectureStyle(chapterName, i);
+   438→   438→      nodes.push(buildLecture(i, 'LECTURE', title));
+   439→   439→    }
+   440→   440→  }
+   441→   441→  if (contentType === 'ALL' || contentType === 'NOTES') {
+   442→   442→    const noteTitles = [
+   443→   443→      `${chapterName} - Complete Class Notes`,
+   444→   444→      `${chapterName} - Short Revision Notes`,
+   445→   445→      `${chapterName} - Formula & Concept Sheet`,
+   446→   446→    ];
+   447→   447→    noteTitles.forEach((t, i) => {
+   448→   448→      const nid = `note_${hashString(`${batchId}_${tagId}_notes_${i}_${t}`).toString(36)}`;
+   449→   449→      nodes.push({
+   450→   450→        _id: `sch_${hashString(`sch_${batchId}_${tagId}_NOTES_${i}`).toString(36)}`,
+   451→   451→        type: 'NOTES',
+   452→   452→        data: {
+   453→   453→          _id: nid,
+   454→   454→          topic: t,
+   455→   455→          name: t,
+   456→   456→          homeworkIds: [{ topic: t, attachmentIds: [noteRef(nid, 'notes')] }],
+   457→   457→          exerciseIds: [],
+   458→   458→        },
+   459→   459→      });
+   460→   460→    });
+   461→   461→  }
+   462→   462→  if (contentType === 'ALL' || contentType === 'DPP_PDF') {
+   463→   463→    const dppCount = 3 + Math.floor(rng() * 3);
+   464→   464→    for (let i = 1; i <= dppCount; i++) {
+   465→   465→      const t = `${chapterName} - DPP ${String(i).padStart(2, '0')} (PDF)`;
+   466→   466→      const did = `dppdf_${hashString(`${batchId}_${tagId}_dppdf_${i}`).toString(36)}`;
+   467→   467→      nodes.push({
+   468→   468→        _id: `sch_${hashString(`sch_${batchId}_${tagId}_DPP_PDF_${i}`).toString(36)}`,
+   469→   469→        type: 'DPP_PDF',
+   470→   470→        data: {
+   471→   471→          _id: did,
+   472→   472→          topic: t,
+   473→   473→          name: t,
+   474→   474→          homeworkIds: [{ topic: t, attachmentIds: [noteRef(did, 'dpp')] }],
+   475→   475→          exerciseIds: [],
+   476→   476→        },
+   477→   477→      });
+   478→   478→    }
+   479→   479→  }
+   480→   480→  if (contentType === 'ALL' || contentType === 'DPP_VIDEOS') {
+   481→   481→    const dvCount = 3 + Math.floor(rng() * 3);
+   482→   482→    for (let i = 1; i <= dvCount; i++) {
+   483→   483→      const t = `${chapterName} - DPP ${String(i).padStart(2, '0')} Video Discussion`;
+   484→   484→      nodes.push(buildLecture(i, 'DPP_VIDEOS', t));
+   485→   485→    }
+   486→   486→  }
+   487→   487→  return nodes;
+   488→   488→}
+   489→   489→
+   490→   490→function noteRef(id: string, kind: 'notes' | 'dpp'): ImageRef {
+   491→   491→  // PDFs are served by our own API
+   492→   492→  return {
+   493→   493→    baseUrl: '',
+   494→   494→    key: `__LOCALPDF__${kind}_${id}`,
+   495→   495→  };
+   496→   496→}
+   497→   497→
+   498→   498→export function resolveAttachmentUrl(ref: ImageRef | { baseUrl?: string; key?: string } | undefined): string {
+   499→   499→  if (!ref) return '/api/notes/generic';
+   500→   500→  const url = (ref.baseUrl || '') + (ref.key || '');
+   501→   501→  if (url.startsWith('__LOCALPDF__')) {
+   502→   502→    // key format: __LOCALPDF__<kind>_<id>  ->  /api/notes/<kind>_<id>
+   503→   503→    return `/api/notes/${url.replace('__LOCALPDF__', '')}`;
+   504→   504→  }
+   505→   505→  if (url.startsWith('http')) return url;
+   506→   506→  return PW_STATIC + url;
+   507→   507→}
+   508→   508→
+   509→   509→// ---------------------------------------------------------------------------
+   510→   510→// DPP list & tests
+   511→   511→// ---------------------------------------------------------------------------
+   512→   512→export function getDppList(batchId: string, subjectId: string, chapterId: string): TestItem[] {
+   513→   513→  const detail = getBatchDetail(batchId);
+   514→   514→  if (!detail) return [];
+   515→   515→  const subject = detail.subjects.find((s) => s._id === subjectId || s.subjectId === subjectId);
+   516→   516→  const bank = subject
+   517→   517→    ? classifyBatch(detail.name, (s) => hashString(s)).chaptersFor(subject.subject)
+   518→   518→    : CHAPTER_BANKS.physics12;
+   519→   519→  const chapter = bank.find((c) => `chp_${hashString(batchId + (subject ? subject._id : '') + c).toString(36)}` === chapterId) || 'Chapter';
+   520→   520→  const rng = makeRng(`dpplst_${batchId}_${subjectId}_${chapterId}`);
+   521→   521→  const count = 2 + Math.floor(rng() * 3);
+   522→   522→  const list: TestItem[] = [];
+   523→   523→  for (let i = 1; i <= count; i++) {
+   524→   524→    const tid = `dppq_${hashString(`dppq_${batchId}_${subjectId}_${chapterId}_${i}`).toString(36)}`;
+   525→   525→    const qs = 10 + Math.floor(rng() * 3) * 5;
+   526→   526→    list.push({
+   527→   527→      _id: tid,
+   528→   528→      name: `${chapter} - DPP ${String(i).padStart(2, '0')}`,
+   529→   529→      totalQuestions: qs,
+   530→   530→      totalMarks: qs * 4,
+   531→   531→      duration: 20 + Math.floor(rng() * 3) * 10,
+   532→   532→      testActivityStatus: 'Not Started',
+   533→   533→      testStudentMapping: null,
+   534→   534→      dppQuizDetails: {
+   535→   535→        contentId: tid,
+   536→   536→        scheduleId: `sch_${hashString(`sch_${batchId}_${chapterId}_DPPQ_${i}`).toString(36)}`,
+   537→   537→        test: { _id: tid, name: `${chapter} - DPP ${String(i).padStart(2, '0')}`, totalQuestions: qs, totalMarks: qs * 4 },
+   538→   538→        testStudentMapping: {},
+   539→   539→      },
+   540→   540→    });
+   541→   541→  }
+   542→   542→  return list;
+   543→   543→}
+   544→   544→
+   545→   545→const TEST_TEMPLATES: Record<string, string[]> = {
+   546→   546→  JEE: ['Unit Test', 'JEE Main Mock', 'JEE Advanced Pattern Test'],
+   547→   547→  NEET: ['NCERT Based Test', 'NEET Mock Test', 'Full Syllabus Test'],
+   548→   548→  BOARDS: ['Chapter Wise Test', 'Half Syllabus Test', 'Sample Paper Practice'],
+   549→   549→  COMMERCE: ['Chapter Wise Test', 'Board Pattern Test', 'Case Study Based Test'],
+   550→   550→  HUMANITIES: ['Chapter Wise Test', 'Source Based Test', 'CUET Pattern Test'],
+   551→   551→  BANKING: ['Module Test', 'Case Study Test', 'Mock Test'],
+   552→   552→  FOUNDATION: ['Weekly Test', 'Monthly Test', 'Olympiad Pattern Test'],
+   553→   553→  GENERAL: ['Unit Test', 'Mock Test', 'Revision Test'],
+   554→   554→};
+   555→   555→
+   556→   556→export function getTests(batchId: string): TestItem[] {
+   557→   557→  const detail = getBatchDetail(batchId);
+   558→   558→  if (!detail) return [];
+   559→   559→  const cls = classifyBatch(detail.name, (s) => hashString(s));
+   560→   560→  const templates = TEST_TEMPLATES[cls.exam] || TEST_TEMPLATES.GENERAL;
+   561→   561→  const rng = makeRng(`tests_${batchId}`);
+   562→   562→  const list: TestItem[] = [];
+   563→   563→  const groups = [
+   564→   564→    { label: 'Weekly Test', n: 6 },
+   565→   565→    { label: templates[0], n: 3 },
+   566→   566→    { label: templates[1], n: 2 },
+   567→   567→    { label: templates[2], n: 2 },
+   568→   568→  ];
+   569→   569→  groups.forEach((g) => {
+   570→   570→    for (let i = 1; i <= g.n; i++) {
+   571→   571→      const tid = `test_${hashString(`test_${batchId}_${g.label}_${i}`).toString(36)}`;
+   572→   572→      const qs = 15 + Math.floor(rng() * 8) * 5;
+   573→   573→      list.push({
+   574→   574→        _id: tid,
+   575→   575→        name: `${g.label} ${String(i).padStart(2, '0')} - ${detail.name.split(' ').slice(0, 3).join(' ')}`,
+   576→   576→        totalQuestions: qs,
+   577→   577→        totalMarks: qs * 4,
+   578→   578→        duration: 60 + Math.floor(rng() * 4) * 30,
+   579→   579→        testActivityStatus: 'Not Started',
+   580→   580→        testStudentMapping: null,
+   581→   581→      });
+   582→   582→    }
+   583→   583→  });
+   584→   584→  return list;
+   585→   585→}
+   586→   586→
+   587→   587→// ---------------------------------------------------------------------------
+   588→   588→// Schedule details (attachments for notes modal / pdf viewer)
+   589→   589→// ---------------------------------------------------------------------------
+   590→   590→export function getScheduleDetail(batchId: string, scheduleId: string) {
+   591→   591→  // We derive deterministic data from the schedule id itself
+   592→   592→  const rng = makeRng(`scheddtl_${batchId}_${scheduleId}`);
+   593→   593→  const detail = getBatchDetail(batchId);
+   594→   594→  const subject = detail && detail.subjects.length ? detail.subjects[0] : null;
+   595→   595→  const attachments: ImageRef[] = [];
+   596→   596→  const count = 1 + Math.floor(rng() * 3);
+   597→   597→  for (let i = 0; i < count; i++) {
+   598→   598→    attachments.push(noteRef(`${scheduleId}_att${i}`, 'notes'));
+   599→   599→  }
+   600→   600→  return {
+   601→   601→    _id: scheduleId,
+   602→   602→    topic: `Study Material ${scheduleId.slice(-4).toUpperCase()}`,
+   603→   603→    name: `Study Material ${scheduleId.slice(-4).toUpperCase()}`,
+   604→   604→    attachmentIds: attachments,
+   605→   605→    homeworkIds: subject
+   606→   606→      ? [
+   607→   607→          {
+   608→   608→            topic: `${subject.subject} - Class Notes`,
+   609→   609→            attachmentIds: [noteRef(`${scheduleId}_hw`, 'notes')],
+   610→   610→          },
+   611→   611→        ]
+   612→   612→      : [],
+   613→   613→    exerciseIds: [] as Record<string, unknown>[],
+   614→   614→  };
+   615→   615→}
+   616→   616→
+   617→   617→// ---------------------------------------------------------------------------
+   618→   618→// Today's schedule (Active Events)
+   619→   619→// ---------------------------------------------------------------------------
+   620→   620→export interface ScheduleEvent {
+   621→   621→  _id: string;
+   622→   622→  type: 'LECTURE';
+   623→   623→  data: {
+   624→   624→    _id: string;
+   625→   625→    topic: string;
+   626→   626→    startTime: string;
+   627→   627→    endTime: string;
+   628→   628→    status: 'LIVE' | 'SCHEDULED' | 'COMPLETED';
+   629→   629→    videoDetails: { image: string };
+   630→   630→    teachers?: string[];
+   631→   631→    subjectId?: { _id: string };
+   632→   632→    homeworkIds: Record<string, unknown>[];
+   633→   633→    exerciseIds: Record<string, unknown>[];
+   634→   634→  };
+   635→   635→}
+   636→   636→
+   637→   637→export function getTodaySchedule(batchId: string): ScheduleEvent[] {
+   638→   638→  const detail = getBatchDetail(batchId);
+   639→   639→  if (!detail) return [];
+   640→   640→  const rng = makeRng(`tdy_${batchId}_${new Date().toISOString().slice(0, 10)}`);
+   641→   641→  const now = new Date();
+   642→   642→  const events: ScheduleEvent[] = [];
+   643→   643→  const count = 2 + Math.floor(rng() * 3);
+   644→   644→  for (let i = 0; i < count; i++) {
+   645→   645→    const subject = detail.subjects[Math.floor(rng() * detail.subjects.length)];
+   646→   646→    const teacher = subject.teacherIds[0];
+   647→   647→    const startOffsetMin = Math.floor((rng() - 0.5) * 480); // -4h to +4h
+   648→   648→    const start = new Date(now.getTime() + startOffsetMin * 60000);
+   649→   649→    start.setSeconds(0, 0);
+   650→   650→    const end = new Date(start.getTime() + (60 + Math.floor(rng() * 60)) * 60000);
+   651→   651→    const vid = `live_${hashString(`${batchId}_today_${i}_${start.toISOString().slice(0, 13)}`).toString(36)}`;
+   652→   652→    const isLive = start <= now && end >= now;
+   653→   653→    const titleBank = [
+   654→   654→      `${subject.subject} | ${teacher ? teacher.firstName + ' Sir' : 'Expert Faculty'} Special Session`,
+   655→   655→      `${subject.subject} Marathon - Rapid Revision`,
+   656→   656→      `${subject.subject} Doubt Destroyer Session`,
+   657→   657→      `${subject.subject} Important Questions Sprint`,
+   658→   658→    ];
+   659→   659→    const title = titleBank[hashString(vid) % titleBank.length];
+   660→   660→    events.push({
+   661→   661→      _id: `tsch_${hashString(`tsch_${batchId}_${i}_${start.toISOString().slice(0, 13)}`).toString(36)}`,
+   662→   662→      type: 'LECTURE',
+   663→   663→      data: {
+   664→   664→        _id: vid,
+   665→   665→        topic: title,
+   666→   666→        startTime: start.toISOString(),
+   667→   667→        endTime: end.toISOString(),
+   668→   668→        status: isLive ? 'LIVE' : 'SCHEDULED',
+   669→   669→        videoDetails: { image: `https://picsum.photos/seed/${vid}/480/270` },
+   670→   670→        teachers: teacher ? [teacher._id] : [],
+   671→   671→        subjectId: { _id: subject._id },
+   672→   672→        homeworkIds: rng() > 0.5 ? [{ topic: 'Session Notes', attachmentIds: [noteRef(vid + '_hw', 'notes')] }] : [],
+   673→   673→        exerciseIds: [],
+   674→   674→      },
+   675→   675→    });
+   676→   676→  }
+   677→   677→  // Sort: live first, then upcoming
+   678→   678→  events.sort((a, b) => new Date(a.data.startTime).getTime() - new Date(b.data.startTime).getTime());
+   679→   679→  return events;
+   680→   680→}
+   681→   681→
+   682→   682→// ---------------------------------------------------------------------------
+   683→   683→// Notifications
+   684→   684→// ---------------------------------------------------------------------------
+   685→   685→const NOTIF_TEMPLATES: Array<{ type: string; heading: string; body: string }> = [
+   686→   686→  { type: 'LECTURE', heading: 'New Lecture Released 🎬', body: 'A brand new lecture has been added to your batch. Watch it now and complete your daily target!' },
+   687→   687→  { type: 'TEST', heading: 'Test Going Live Today 📝', body: 'Your scheduled test is now available. Attempt it within the window to keep your streak alive.' },
+   688→   688→  { type: 'DPP', heading: 'DPP Uploaded ✍️', body: 'Practice makes perfect! The Daily Practice Problem sheet for your ongoing chapter is now available.' },
+   689→   689→  { type: 'GENERAL', heading: 'Important Announcement 📢', body: 'Check the new schedule updates in your batch. Stay consistent and keep grinding towards your goal.' },
+   690→   690→  { type: 'DISCOUNT_OFFERS', heading: 'Special Offer Unlocked 🔥', body: 'Limited time discount on PW study material. Grab it before the offer ends!' },
+   691→   691→  { type: 'LECTURE', heading: 'Lecture Notes Added 📄', body: 'Notes for the latest lecture have been uploaded. Download and revise the concepts taught today.' },
+   692→   692→];
+   693→   693→
+   694→   694→export function getNotifications(batchId: string, page: number, limit: number): { data: NotificationItem[]; hasMore: boolean } {
+   695→   695→  const detail = getBatchDetail(batchId);
+   696→   696→  if (!detail) return { data: [], hasMore: false };
+   697→   697→  const total = 66;
+   698→   698→  const offset = (page - 1) * limit;
+   699→   699→  const items: NotificationItem[] = [];
+   700→   700→  for (let i = offset; i < Math.min(offset + limit, total); i++) {
+   701→   701→    const tpl = NOTIF_TEMPLATES[hashString(batchId + 'n' + i) % NOTIF_TEMPLATES.length];
+   702→   702→    const hoursAgo = i * 7 + (hashString(batchId + 'h' + i) % 6);
+   703→   703→    items.push({
+   704→   704→      _id: `ntf_${hashString(batchId + '_ntf_' + i).toString(36)}`,
+   705→   705→      type: tpl.type,
+   706→   706→      heading: tpl.heading,
+   707→   707→      announcement: tpl.body,
+   708→   708→      scheduleTime: new Date(Date.now() - hoursAgo * 3600000).toISOString(),
+   709→   709→      isRead: hoursAgo > 48,
+   710→   710→      attachment: null,
+   711→   711→    });
+   712→   712→  }
+   713→   713→  return { data: items, hasMore: (page * limit) < total };
+   714→   714→}
+   715→   715→
+   716→   716→// ---------------------------------------------------------------------------
+   717→   717→// Teacher detail
+   718→   718→// ---------------------------------------------------------------------------
+   719→   719→export function getTeacherDetail(batchId: string, teacherId: string) {
+   720→   720→  const detail = getBatchDetail(batchId);
+   721→   721→  if (!detail) return null;
+   722→   722→  for (const sub of detail.subjects) {
+   723→   723→    const t = sub.teacherIds.find((x) => x._id === teacherId);
+   724→   724→    if (t) return t;
+   725→   725→  }
+   726→   726→  return null;
+   727→   727→}
+   728→   728→
+   729→   729→// ---------------------------------------------------------------------------
+   730→   730→// Video payload
+   731→   731→// ---------------------------------------------------------------------------
+   732→   732→export function getVideoPayload(videoId: string) {
+   733→   733→  const url = DEMO_VIDEOS[hashString(videoId) % DEMO_VIDEOS.length];
+   734→   734→  return {
+   735→   735→    url,
+   736→   736→    signedUrl: '',
+   737→   737→    drmDetails: null,
+   738→   738→    poster: `https://picsum.photos/seed/${videoId}/1280/720`,
+   739→   739→  };
+   740→   740→}
+   741→   741→
+   742→   742→// ---------------------------------------------------------------------------
+   743→   743→// Quiz engine (DPP / Test attempt)
+   744→   744→// ---------------------------------------------------------------------------
+   745→   745→export interface QuizQuestion {
+   746→   746→  _id: string;
+   747→   747→  q: string;
+   748→   748→  options: string[];
+   749→   749→  correct: number;
+   750→   750→  explanation: string;
+   751→   751→}
+   752→   752→
+   753→   753→export interface QuizPayload {
+   754→   754→  testId: string;
+   755→   755→  title: string;
+   756→   756→  durationMin: number;
+   757→   757→  totalMarks: number;
+   758→   758→  questions: QuizQuestion[];
+   759→   759→}
+   760→   760→
+   761→   761→function findTestName(batchId: string, testId: string): string {
+   762→   762→  const dpp = getDppListFlat(batchId).find((t) => t._id === testId);
+   763→   763→  if (dpp) return dpp.name;
+   764→   764→  const test = getTests(batchId).find((t) => t._id === testId);
+   765→   765→  if (test) return test.name;
+   766→   766→  return 'Practice Quiz';
+   767→   767→}
+   768→   768→
+   769→   769→function getDppListFlat(batchId: string): TestItem[] {
+   770→   770→  const detail = getBatchDetail(batchId);
+   771→   771→  if (!detail) return [];
+   772→   772→  const out: TestItem[] = [];
+   773→   773→  for (const sub of detail.subjects) {
+   774→   774→    out.push(...getDppList(batchId, sub._id, 'all'));
+   775→   775→  }
+   776→   776→  return out;
+   777→   777→}
+   778→   778→
+   779→   779→const QUESTION_TEMPLATES: Array<(topic: string) => { q: string; opts: [string, string, string, string]; correct: number; why: string }> = [
+   780→   780→  (t) => ({
+   781→   781→    q: `Which of the following statements best describes the core idea of "${t}"?`,
+   782→   782→    opts: [
+   783→   783→      `It establishes the fundamental principles used to solve problems in ${t}.`,
+   784→   784→      `It is unrelated to the main syllabus of ${t}.`,
+   785→   785→      `It only applies to advanced research, not to exams.`,
+   786→   786→      `It has no practical or theoretical significance.`,
+   787→   787→    ],
+   788→   788→    correct: 0,
+   789→   789→    why: `"${t}" forms a core part of the syllabus and its fundamental principles are frequently tested in exams.`,
+   790→   790→  }),
+   791→   791→  (t) => ({
+   792→   792→    q: `While revising "${t}", which strategy is most effective for exam preparation?`,
+   793→   793→    opts: [
+   794→   794→      `Solving previous year questions and DPPs based on ${t}.`,
+   795→   795→      `Skipping all practice and only reading summaries.`,
+   796→   796→      `Memorising solutions without understanding concepts.`,
+   797→   797→      `Avoiding numericals and conceptual questions entirely.`,
+   798→   798→    ],
+   799→   799→    correct: 0,
+   800→   800→    why: `Regular practice with DPPs and PYQs is the proven strategy for mastering "${t}".`,
+   801→   801→  }),
+   802→   802→  (t) => ({
+   803→   803→    q: `A question from "${t}" appears in the exam. What should be your first step?`,
+   804→   804→    opts: [
+   805→   805→      `Identify the concept being tested from ${t} before attempting calculations.`,
+   806→   806→      `Start plugging random formulas immediately.`,
+   807→   807→      `Leave the question without reading it fully.`,
+   808→   808→      `Assume it is out of syllabus.`,
+   809→   809→    ],
+   810→   810→    correct: 0,
+   811→   811→    why: `Reading the question and identifying the underlying concept from "${t}" prevents silly mistakes and saves time.`,
+   812→   812→  }),
+   813→   813→  (t) => ({
+   814→   814→    q: `Which type of questions are most commonly asked from "${t}"?`,
+   815→   815→    opts: [
+   816→   816→      `Conceptual + application-based questions mixing fundamentals of ${t}.`,
+   817→   817→      `Questions unrelated to the chapter.`,
+   818→   818→      `Only definition-based questions.`,
+   819→   819→      `Only theoretical essays.`,
+   820→   820→    ],
+   821→   821→    correct: 0,
+   822→   822→    why: `Exams typically blend conceptual understanding with application for "${t}".`,
+   823→   823→  }),
+   824→   824→  (t) => ({
+   825→   825→    q: `If you score poorly in a DPP from "${t}", the best next action is:`,
+   826→   826→    opts: [
+   827→   827→      `Re-watch the relevant lecture, revise notes and re-attempt the DPP.`,
+   828→   828→      `Ignore the mistakes and move on.`,
+   829→   829→      `Blame the question quality.`,
+   830→   830→      `Stop practising ${t} altogether.`,
+   831→   831→    ],
+   832→   832→    correct: 0,
+   833→   833→    why: `The learn → practise → analyse → re-attempt loop is key to mastering "${t}".`,
+   834→   834→  }),
+   835→   835→];
+   836→   836→
+   837→   837→export function getQuiz(batchId: string, testId: string): QuizPayload | null {
+   838→   838→  const detail = getBatchDetail(batchId);
+   839→   839→  const title = detail ? findTestName(batchId, testId) : 'Practice Quiz';
+   840→   840→  const rng = makeRng(`quiz_${testId}`);
+   841→   841→  const count = 5 + Math.floor(rng() * 4); // 5-8 questions
+   842→   842→  const topic = title.replace(/\s*-\s*DPP\s*\d+/i, '').replace(/_\d+$/, '');
+   843→   843→  const questions: QuizQuestion[] = [];
+   844→   844→  const used = new Set<number>();
+   845→   845→  for (let i = 0; i < count; i++) {
+   846→   846→    let tIdx = hashString(testId + '_' + i) % QUESTION_TEMPLATES.length;
+   847→   847→    let guard = 0;
+   848→   848→    while (used.has(tIdx) && guard < QUESTION_TEMPLATES.length) {
+   849→   849→      tIdx = (tIdx + 1) % QUESTION_TEMPLATES.length;
+   850→   850→      guard++;
+   851→   851→    }
+   852→   852→    used.add(tIdx);
+   853→   853→    const tpl = QUESTION_TEMPLATES[tIdx](topic);
+   854→   854→    // Deterministic shuffle of options
+   855→   855→    const order = [0, 1, 2, 3].sort(() => rng() - 0.5);
+   856→   856→    questions.push({
+   857→   857→      _id: `q_${hashString(`${testId}_q${i}`).toString(36)}`,
+   858→   858→      q: tpl.q,
+   859→   859→      options: order.map((o) => tpl.opts[o]),
+   860→   860→      correct: order.indexOf(tpl.correct),
+   861→   861→      explanation: tpl.why,
+   862→   862→    });
+   863→   863→  }
+   864→   864→  return {
+   865→   865→    testId,
+   866→   866→    title,
+   867→   867→    durationMin: 15 + Math.floor(rng() * 3) * 5,
+   868→   868→    totalMarks: questions.length * 4,
+   869→   869→    questions,
+   870→   870→  };
+   871→   871→}
+   872→   872→

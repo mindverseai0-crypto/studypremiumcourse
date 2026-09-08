@@ -1,0 +1,1098 @@
+     1→'use client';
+     2→
+     3→// ============================================================================
+     4→// StudyBee Pro — main SPA (clone of studybee-by-uthu.pages.dev)
+     5→// Views: All Courses (home) / Study Dashboard / All Classes / Chapters /
+     6→// Content / All Tests. Bottom-sheet modals: batch info, teacher, notes, DPP.
+     7→// ============================================================================
+     8→
+     9→import { useCallback, useEffect, useRef, useState } from 'react';
+    10→import {
+    11→  api,
+    12→  fetchCatalog,
+    13→  imageUrl,
+    14→  BatchCatalogItem,
+    15→  BatchDetailPublic,
+    16→  BatchSubjectPublic,
+    17→  ChapterItemPublic,
+    18→  ContentNodePublic,
+    19→  ScheduleEventPublic,
+    20→  TestItemPublic,
+    21→} from '@/lib/api-client';
+    22→import { addXP, useEnrolledBatches, useXP, useWatchedVideos } from '@/lib/local-state';
+    23→
+    24→type ViewId = 'home-view' | 'study-view' | 'all-classes-view' | 'chapters-view' | 'content-view' | 'all-tests-view';
+    25→
+    26→interface SubjectRef { id: string; internalId: string; name: string }
+    27→interface TopicRef { id: string; name: string }
+    28→interface AttachmentRow { title: string; url: string }
+    29→interface DppRow {
+    30→  testId: string;
+    31→  scheduleId: string;
+    32→  name: string;
+    33→  isAttempted: boolean;
+    34→  actionType: string;
+    35→  testMapId: string;
+    36→}
+    37→interface DppMeta {
+    38→  testId: string;
+    39→  scheduleId: string;
+    40→  isAttempted: boolean;
+    41→  actionType: string;
+    42→  testMapId: string;
+    43→}
+    44→
+    45→const DEFAULT_THUMB = 'https://store.pw.live/footer-logo.svg';
+    46→
+    47→export default function StudyBeeApp() {
+    48→  // ---------------- global nav ----------------
+    49→  const [view, setView] = useState<ViewId>('home-view');
+    50→  const [sidebarOpen, setSidebarOpen] = useState(false);
+    51→
+    52→  // ---------------- home / catalog ----------------
+    53→  const [batches, setBatches] = useState<BatchCatalogItem[]>([]);
+    54→  const [page, setPage] = useState(1);
+    55→  const [hasMore, setHasMore] = useState(false);
+    56→  const [searchTerm, setSearchTerm] = useState('');
+    57→  const [searching, setSearching] = useState(false);
+    58→  const [catalogError, setCatalogError] = useState('');
+    59→  const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+    60→  const debounceTerm = useRef('');
+    61→
+    62→  // ---------------- enrollment ----------------
+    63→  const { enrolled, enroll, unenroll } = useEnrolledBatches();
+    64→  const { watched, toggleWatched } = useWatchedVideos();
+    65→  const xp = useXP();
+    66→  const batchDetailCache = useRef<Map<string, BatchDetailPublic>>(new Map());
+    67→
+    68→  // ---------------- study ----------------
+    69→  const [currentBatchId, setCurrentBatchId] = useState<string | null>(null);
+    70→  const [enrolledDetails, setEnrolledDetails] = useState<BatchDetailPublic[]>([]);
+    71→  const [events, setEvents] = useState<ScheduleEventPublic[]>([]);
+    72→  const [eventsLoading, setEventsLoading] = useState(false);
+    73→
+    74→  // ---------------- classes / chapters / content ----------------
+    75→  const [subjects, setSubjects] = useState<BatchSubjectPublic[]>([]);
+    76→  const [subjectsLoading, setSubjectsLoading] = useState(false);
+    77→  const [currentSubject, setCurrentSubject] = useState<SubjectRef | null>(null);
+    78→  const [chaptersTab, setChaptersTab] = useState<'UNITS' | 'STUDY_MATERIAL'>('UNITS');
+    79→  const [chapters, setChapters] = useState<ChapterItemPublic[]>([]);
+    80→  const [chaptersLoading, setChaptersLoading] = useState(false);
+    81→  const [currentTopic, setCurrentTopic] = useState<TopicRef | null>(null);
+    82→  const [contentTab, setContentTab] = useState('ALL');
+    83→  const [contentNodes, setContentNodes] = useState<ContentNodePublic[]>([]);
+    84→  const [dppItems, setDppItems] = useState<TestItemPublic[]>([]);
+    85→  const [contentLoading, setContentLoading] = useState(false);
+    86→
+    87→  // ---------------- tests ----------------
+    88→  const [tests, setTests] = useState<TestItemPublic[]>([]);
+    89→  const [testsLoading, setTestsLoading] = useState(false);
+    90→
+    91→  // ---------------- resources tab ----------------
+    92→  const [resourcesTab, setResourcesTab] = useState<'subjects' | 'resources'>('subjects');
+    93→  const [resourceTopics, setResourceTopics] = useState<ChapterItemPublic[]>([]);
+    94→  const [resourcesLoading, setResourcesLoading] = useState(false);
+    95→
+    96→  // ---------------- modals ----------------
+    97→  const [batchInfoOpen, setBatchInfoOpen] = useState(false);
+    98→  const [batchInfo, setBatchInfo] = useState<BatchDetailPublic | null>(null);
+    99→  const [batchInfoLoading, setBatchInfoLoading] = useState(false);
+   100→
+   101→  const [notesOpen, setNotesOpen] = useState(false);
+   102→  const [notesLoading, setNotesLoading] = useState(false);
+   103→  const [noteRows, setNoteRows] = useState<AttachmentRow[]>([]);
+   104→  const [noteDppRows, setNoteDppRows] = useState<DppRow[]>([]);
+   105→
+   106→  const [dppOpen, setDppOpen] = useState(false);
+   107→  const [dppMeta, setDppMeta] = useState<DppMeta | null>(null);
+   108→
+   109→  const [testFrame, setTestFrame] = useState<{ open: boolean; url: string; title: string }>({ open: false, url: '', title: 'Test Attempt' });
+   110→  const [testPreparing, setTestPreparing] = useState<string | null>(null);
+   111→
+   112→  // ==================================================================
+   113→  // NAV
+   114→  // ==================================================================
+   115→  const nav = useCallback((v: ViewId) => {
+   116→    setView(v);
+   117→    setSidebarOpen(false);
+   118→    window.scrollTo(0, 0);
+   119→  }, []);
+   120→
+   121→  // ==================================================================
+   122→  // CATALOG (home view)
+   123→  // ==================================================================
+   124→  const loadCatalog = useCallback(async (q: string, p: number, isNew: boolean) => {
+   125→    try {
+   126→      if (isNew) {
+   127→        setSearching(true);
+   128→        setBatches([]);
+   129→      }
+   130→      setCatalogError('');
+   131→      const res = await fetchCatalog(q, p, 20);
+   132→      setBatches((prev) => (isNew ? res.data : [...prev, ...res.data]));
+   133→      setHasMore(res.hasMore);
+   134→      setPage(p);
+   135→    } catch {
+   136→      setCatalogError('Failed to load batches.');
+   137→    } finally {
+   138→      setSearching(false);
+   139→    }
+   140→  }, []);
+   141→
+   142→  useEffect(() => {
+   143→    loadCatalog('', 1, true);
+   144→  }, [loadCatalog]);
+   145→
+   146→  const handleSearchInput = (value: string) => {
+   147→    setSearchTerm(value);
+   148→    debounceTerm.current = value;
+   149→    if (searchTimeout.current) clearTimeout(searchTimeout.current);
+   150→    searchTimeout.current = setTimeout(() => {
+   151→      loadCatalog(debounceTerm.current, 1, true);
+   152→    }, 500);
+   153→  };
+   154→
+   155→  const loadNextPage = () => {
+   156→    loadCatalog(searchTerm, page + 1, false);
+   157→  };
+   158→
+   159→  /** Catalog card click — open the real-data batch detail sheet. */
+   160→  const openCatalogInfo = async (b: BatchCatalogItem) => {
+   161→    setBatchInfoOpen(true);
+   162→    setBatchInfoLoading(true);
+   163→    setBatchInfo(b);
+   164→    const res = await api.batchDetail(b._id);
+   165→    if (res.success && res.data) setBatchInfo(res.data);
+   166→    setBatchInfoLoading(false);
+   167→  };
+   168→
+   169→  const enrollInBatch = (batchId: string) => {
+   170→    enroll(batchId);
+   171→    setCurrentBatchId(batchId);
+   172→    setBatchInfoOpen(false);
+   173→    nav('study-view');
+   174→  };
+   175→
+   176→  const studyBatch = (batchId: string) => {
+   177→    setBatchInfoOpen(false);
+   178→    setCurrentBatchId(batchId);
+   179→    nav('study-view');
+   180→  };
+   181→
+   182→  // ==================================================================
+   183→  // STUDY DASHBOARD
+   184→  // ==================================================================
+   185→  const refreshEnrolledDetails = useCallback(async () => {
+   186→    const results: BatchDetailPublic[] = [];
+   187→    for (const id of enrolled) {
+   188→      const cached = batchDetailCache.current.get(id);
+   189→      if (cached) {
+   190→        results.push(cached);
+   191→        continue;
+   192→      }
+   193→      const res = await api.batchDetail(id);
+   194→      if (res.success && res.data) {
+   195→        batchDetailCache.current.set(id, res.data);
+   196→        results.push(res.data);
+   197→      }
+   198→    }
+   199→    setEnrolledDetails(results);
+   200→    setCurrentBatchId((cur) => {
+   201→      if (cur && results.some((r) => r._id === cur)) return cur;
+   202→      return results.length > 0 ? results[0]._id : null;
+   203→    });
+   204→  }, [enrolled]);
+   205→
+   206→  useEffect(() => {
+   207→    refreshEnrolledDetails();
+   208→  }, [refreshEnrolledDetails]);
+   209→
+   210→  const loadEvents = useCallback(async (batchId: string) => {
+   211→    setEventsLoading(true);
+   212→    const res = await api.todaySchedule(batchId);
+   213→    setEvents(res.success && res.data ? res.data : []);
+   214→    setEventsLoading(false);
+   215→  }, []);
+   216→
+   217→  useEffect(() => {
+   218→    if (currentBatchId) loadEvents(currentBatchId);
+   219→    else setEvents([]);
+   220→  }, [currentBatchId, loadEvents]);
+   221→
+   222→  const currentBatch = enrolledDetails.find((b) => b._id === currentBatchId) || null;
+   223→
+   224→  // ==================================================================
+   225→  // ALL CLASSES — SUBJECTS & RESOURCES
+   226→  // ==================================================================
+   227→  const loadSubjects = useCallback(async (batchId: string) => {
+   228→    setSubjectsLoading(true);
+   229→    // Real catalog has no subject mapping — the API returns an empty list.
+   230→    const res = await api.batchDetail(batchId);
+   231→    if (res.success && res.data) {
+   232→      batchDetailCache.current.set(batchId, res.data);
+   233→    }
+   234→    setSubjects([]);
+   235→    setSubjectsLoading(false);
+   236→  }, []);
+   237→
+   238→  const loadResources = useCallback(async (batchId: string) => {
+   239→    setResourcesLoading(true);
+   240→    const res = await api.resourceTopics(batchId, '');
+   241→    const topics = res.success && res.data ? (res.data as unknown as { data?: ChapterItemPublic[] }).data || [] : [];
+   242→    setResourceTopics(topics);
+   243→    setResourcesLoading(false);
+   244→  }, []);
+   245→
+   246→  const openAllClasses = () => {
+   247→    setResourcesTab('subjects');
+   248→    nav('all-classes-view');
+   249→    if (currentBatchId) loadSubjects(currentBatchId);
+   250→  };
+   251→
+   252→  const switchClassesTab = (tab: 'subjects' | 'resources') => {
+   253→    setResourcesTab(tab);
+   254→    if (tab === 'subjects' && currentBatchId) loadSubjects(currentBatchId);
+   255→    if (tab === 'resources' && currentBatchId) loadResources(currentBatchId);
+   256→  };
+   257→
+   258→  // ==================================================================
+   259→  // CHAPTERS
+   260→  // ==================================================================
+   261→  const loadChaptersList = useCallback(async (subjectId: string, tagType: 'UNITS' | 'STUDY_MATERIAL') => {
+   262→    if (!currentBatchId) return;
+   263→    setChaptersLoading(true);
+   264→    const res = await api.subjectTopics(currentBatchId, subjectId, tagType);
+   265→    const list = res.success && res.data ? (res.data as unknown as { data?: ChapterItemPublic[] }).data || [] : [];
+   266→    setChapters(list);
+   267→    setChaptersLoading(false);
+   268→  }, [currentBatchId]);
+   269→
+   270→  const openSubject = (sub: BatchSubjectPublic) => {
+   271→    setCurrentSubject({ id: sub._id, internalId: sub.subjectId, name: sub.subject });
+   272→    setChaptersTab('UNITS');
+   273→    nav('chapters-view');
+   274→    loadChaptersList(sub._id, 'UNITS');
+   275→  };
+   276→
+   277→  const switchChaptersTab = (tagType: 'UNITS' | 'STUDY_MATERIAL') => {
+   278→    setChaptersTab(tagType);
+   279→    if (currentSubject) loadChaptersList(currentSubject.id, tagType);
+   280→  };
+   281→
+   282→  // ==================================================================
+   283→  // CONTENT
+   284→  // ==================================================================
+   285→  const loadContent = useCallback(async (subjectId: string, tagId: string, filter: string) => {
+   286→    if (!currentBatchId) return;
+   287→    setContentLoading(true);
+   288→    if (filter === 'DPP_TEST') {
+   289→      const res = await api.dppList(currentBatchId, subjectId || '', tagId);
+   290→      const list = res.success && res.data ? (res.data as unknown as { data?: TestItemPublic[] }).data || [] : [];
+   291→      setDppItems(list);
+   292→      setContentNodes([]);
+   293→    } else {
+   294→      const res = await api.scheduleContent(currentBatchId, subjectId || '', tagId, filter);
+   295→      const nodes = res.success && res.data ? (res.data as ContentNodePublic[]) : [];
+   296→      setContentNodes(nodes);
+   297→      setDppItems([]);
+   298→    }
+   299→    setContentLoading(false);
+   300→  }, [currentBatchId]);
+   301→
+   302→  const openTopic = (t: ChapterItemPublic) => {
+   303→    setCurrentTopic({ id: t._id, name: t.name });
+   304→    setContentTab('ALL');
+   305→    nav('content-view');
+   306→    if (currentSubject) loadContent(currentSubject.id, t._id, 'ALL');
+   307→  };
+   308→
+   309→  const openResourceTopic = (t: ChapterItemPublic) => {
+   310→    setCurrentSubject({ id: t.typeId, internalId: t.typeId, name: 'Resources' });
+   311→    setCurrentTopic({ id: t._id, name: t.name });
+   312→    setContentTab('ALL');
+   313→    nav('content-view');
+   314→    loadContent(t.typeId, t._id, 'ALL');
+   315→  };
+   316→
+   317→  const filterContentTab = (filter: string) => {
+   318→    setContentTab(filter);
+   319→    if (currentSubject && currentTopic) loadContent(currentSubject.id, currentTopic.id, filter);
+   320→  };
+   321→
+   322→  // ==================================================================
+   323→  // TESTS
+   324→  // ==================================================================
+   325→  const openAllTests = () => {
+   326→    nav('all-tests-view');
+   327→    if (!currentBatchId) return;
+   328→    setTestsLoading(true);
+   329→    api.testList(currentBatchId).then((res) => {
+   330→      setTests(res.success && res.data ? res.data : []);
+   331→      setTestsLoading(false);
+   332→    }).catch(() => {
+   333→      setTests([]);
+   334→      setTestsLoading(false);
+   335→    });
+   336→  };
+   337→
+   338→  const launchTestGateway = async (testId: string) => {
+   339→    setTestPreparing(testId);
+   340→    const res = await api.testMap(testId);
+   341→    let actionType = 'Start';
+   342→    let testMapId = '';
+   343→    if (res.success && res.data && res.data.length > 0) {
+   344→      actionType = res.data[0].tag2 || 'Start';
+   345→      testMapId = res.data[0].testStudentMapping?._id || '';
+   346→    }
+   347→    const url = `/quiz?testId=${testId}&batchId=${currentBatchId || ''}&mode=TEST&type=${actionType}&mapId=${testMapId}`;
+   348→    setTestPreparing(null);
+   349→    setTestFrame({ open: true, url, title: 'Test Attempt' });
+   350→  };
+   351→
+   352→  // ==================================================================
+   353→  // MODALS
+   354→  // ==================================================================
+   355→  const openBatchInfo = async () => {
+   356→    if (!currentBatchId) return;
+   357→    setBatchInfoOpen(true);
+   358→    setBatchInfoLoading(true);
+   359→    const res = await api.batchDetail(currentBatchId);
+   360→    setBatchInfo(res.success && res.data ? res.data : null);
+   361→    setBatchInfoLoading(false);
+   362→  };
+   363→
+   364→  const openNotesModal = async (scheduleId: string) => {
+   365→    if (!currentBatchId) return;
+   366→    setNotesOpen(true);
+   367→    setNotesLoading(true);
+   368→    setNoteRows([]);
+   369→    setNoteDppRows([]);
+   370→    const res = await api.scheduleDetail(currentBatchId, scheduleId);
+   371→    const item = res.data as {
+   372→      topic?: string;
+   373→      name?: string;
+   374→      attachmentIds?: Array<{ baseUrl?: string; key?: string }>;
+   375→      homeworkIds?: Array<{ topic?: string; attachmentIds?: Array<{ baseUrl?: string; key?: string }> }>;
+   376→      exerciseIds?: Array<Record<string, unknown>>;
+   377→    } | undefined;
+   378→
+   379→    const rows: AttachmentRow[] = [];
+   380→    if (item) {
+   381→      (item.homeworkIds || []).forEach((hw) => {
+   382→        (hw.attachmentIds || []).forEach((att) => {
+   383→          rows.push({ title: hw.topic || 'Class Note', url: imageUrl(att) });
+   384→        });
+   385→      });
+   386→      (item.attachmentIds || []).forEach((att) => {
+   387→        rows.push({ title: item.topic || item.name || 'Document', url: imageUrl(att) });
+   388→      });
+   389→    }
+   390→    setNoteRows(rows);
+   391→
+   392→    // DPP matches from exercises
+   393→    const testRes = await api.testList(currentBatchId);
+   394→    const testList = testRes.success && testRes.data ? testRes.data : [];
+   395→    const dppRows: DppRow[] = [];
+   396→    (item?.exerciseIds || []).forEach((ex) => {
+   397→      const exDppId = String((ex as { dppId?: string }).dppId || (ex as { _id?: string })._id || '');
+   398→      const match = testList.find((t) => t.dppQuizDetails && t.dppQuizDetails.contentId === exDppId);
+   399→      if (match && match.dppQuizDetails) {
+   400→        const status = String((match.dppQuizDetails.testStudentMapping as { testActivityStatus?: string })?.testActivityStatus || '');
+   401→        dppRows.push({
+   402→          testId: match.dppQuizDetails.test._id,
+   403→          scheduleId: match.dppQuizDetails.scheduleId,
+   404→          name: (ex as { title?: string }).title || match.dppQuizDetails.test.name,
+   405→          isAttempted: status === 'Finished' || status === 'COMPLETED',
+   406→          actionType: status === 'Finished' ? 'Reattempt' : status === 'Started' ? 'Resume' : 'Start',
+   407→          testMapId: '',
+   408→        });
+   409→      }
+   410→    });
+   411→    setNoteDppRows(dppRows);
+   412→    setNotesLoading(false);
+   413→  };
+   414→
+   415→  const openDirectPdf = async (scheduleId: string) => {
+   416→    if (!currentBatchId) return;
+   417→    const res = await api.scheduleDetail(currentBatchId, scheduleId);
+   418→    const item = res.data as {
+   419→      topic?: string;
+   420→      name?: string;
+   421→      attachmentIds?: Array<{ baseUrl?: string; key?: string }>;
+   422→      homeworkIds?: Array<{ topic?: string; attachmentIds?: Array<{ baseUrl?: string; key?: string }> }>;
+   423→      exerciseIds?: Array<{ title?: string; attachmentIds?: Array<{ baseUrl?: string; key?: string }> }>;
+   424→    } | undefined;
+   425→    const rows: AttachmentRow[] = [];
+   426→    if (item) {
+   427→      (item.attachmentIds || []).forEach((att) => rows.push({ title: item.topic || item.name || 'Document', url: imageUrl(att) }));
+   428→      (item.homeworkIds || []).forEach((hw) => (hw.attachmentIds || []).forEach((att) => rows.push({ title: hw.topic || 'Class Note', url: imageUrl(att) })));
+   429→      (item.exerciseIds || []).forEach((ex) => (ex.attachmentIds || []).forEach((att) => rows.push({ title: ex.title || 'DPP', url: imageUrl(att) })));
+   430→    }
+   431→    const deduped = rows.filter((r, i, arr) => arr.findIndex((x) => x.url === r.url) === i);
+   432→    if (deduped.length === 0) return;
+   433→    if (deduped.length === 1) {
+   434→      window.open(deduped[0].url, '_blank');
+   435→      addXP(5, 'Viewed Document');
+   436→    } else {
+   437→      setNoteRows(deduped);
+   438→      setNoteDppRows([]);
+   439→      setNotesOpen(true);
+   440→    }
+   441→  };
+   442→
+   443→  const openDppModal = (meta: DppMeta) => {
+   444→    setDppMeta(meta);
+   445→    setDppOpen(true);
+   446→  };
+   447→
+   448→  const launchDpp = (mode: 'BATCH_QUIZ' | 'DPP_QUIZ_MODE') => {
+   449→    if (!dppMeta || !currentBatchId) return;
+   450→    const subjectId = currentSubject?.internalId || currentSubject?.id || '';
+   451→    const url = `/quiz?testId=${dppMeta.testId}&batchId=${currentBatchId}&mode=${mode}&scheduleId=${dppMeta.scheduleId}&subjectId=${subjectId}&type=${dppMeta.actionType}`;
+   452→    addXP(10, 'Attempted Test/DPP');
+   453→    setDppOpen(false);
+   454→    setTestFrame({ open: true, url, title: 'DPP Attempt' });
+   455→  };
+   456→
+   457→  const handleUnenroll = (batchId: string) => {
+   458→    if (!window.confirm('Are you sure you want to unenroll from this batch?')) return;
+   459→    unenroll(batchId);
+   460→    setBatchInfoOpen(false);
+   461→    if (currentBatchId === batchId) {
+   462→      const remaining = enrolled.filter((id) => id !== batchId);
+   463→      if (remaining.length > 0) setCurrentBatchId(remaining[0]);
+   464→      else {
+   465→        setCurrentBatchId(null);
+   466→        nav('home-view');
+   467→      }
+   468→    }
+   469→  };
+   470→
+   471→  // ==================================================================
+   472→  // RENDER HELPERS
+   473→  // ==================================================================
+   474→  const renderLectureCard = (node: ContentNodePublic) => {
+   475→    const d = node.data;
+   476→    const thumb = d.videoDetails?.image || DEFAULT_THUMB;
+   477→    const title = d.topic || d.name || 'Lecture';
+   478→    const date = d.date ? new Date(d.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+   479→    const vId = d.videoDetails?._id || d._id;
+   480→    const vUrl = d.videoDetails?.videoUrl || '';
+   481→    const isWatched = watched.includes(vId);
+   482→    const bName = currentBatch?.name || 'PW Batch';
+   483→    const playerUrl = `/player?videoId=${vId}&schId=${node._id}&batchId=${currentBatchId || ''}&subjectId=${currentSubject?.id || ''}&title=${encodeURIComponent(title)}&batchName=${encodeURIComponent(bName)}&vUrl=${encodeURIComponent(vUrl)}`;
+   484→    const hasAttachments = (d.homeworkIds && d.homeworkIds.length > 0) || (d.exerciseIds && d.exerciseIds.length > 0);
+   485→
+   486→    return (
+   487→      <div className="content-card" key={node._id} style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+   488→        <div className="d-flex gap-3 mb-3">
+   489→          <img src={thumb} className="lecture-thumb" alt={title} />
+   490→          <div className="flex-grow-1">
+   491→            <span style={{ background: '#eff6ff', color: '#2563eb', fontSize: '0.7rem', fontWeight: 800, padding: '2px 6px', borderRadius: 4, display: 'inline-block', marginBottom: 5 }}>
+   492→              {node.type === 'DPP_VIDEOS' ? 'DPP VIDEO' : 'VIDEO'}
+   493→            </span>
+   494→            <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--sb-text-dark)' }}>{title}</div>
+   495→            <div style={{ color: 'var(--sb-text-muted)', fontSize: '0.8rem', marginTop: 5 }}>
+   496→              <i className="fas fa-clock"></i> {date} &bull; {d.videoDetails?.duration || '1h'}
+   497→            </div>
+   498→          </div>
+   499→        </div>
+   500→        <div className="d-flex gap-2">
+   501→          <button
+   502→            className={`btn-check-done ${isWatched ? 'active' : ''}`}
+   503→            title="Mark as Watched"
+   504→            onClick={() => {
+   505→              const added = toggleWatched(vId);
+   506→              if (added) addXP(10, 'Watched Video');
+   507→            }}
+   508→          >
+   509→            <i className="fas fa-check"></i>
+   510→          </button>
+   511→          <button className="btn-play" style={{ flexGrow: 1 }} onClick={() => window.open(playerUrl, '_blank')}>
+   512→            <i className="fas fa-play"></i> Watch
+   513→          </button>
+   514→          {hasAttachments ? (
+   515→            <button className="btn-notes" onClick={() => openNotesModal(node._id)}>
+   516→              <i className="fas fa-file-alt"></i>
+   517→            </button>
+   518→          ) : null}
+   519→        </div>
+   520→      </div>
+   521→    );
+   522→  };
+   523→
+   524→  const renderPdfCard = (node: ContentNodePublic) => {
+   525→    const d = node.data;
+   526→    const title = d.homeworkIds?.[0]?.topic || d.topic || 'Document';
+   527→    const tagColor = node.type === 'DPP_PDF' ? '#d97706' : '#e11d48';
+   528→    const tagBg = node.type === 'DPP_PDF' ? '#fef3c7' : '#fee2e2';
+   529→    return (
+   530→      <div className="content-card d-flex align-items-center justify-content-between" key={node._id} style={{ padding: 20 }}>
+   531→        <div className="d-flex align-items-center gap-3" style={{ maxWidth: '75%' }}>
+   532→          <div style={{ background: tagBg, color: tagColor, width: 40, height: 40, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem', flexShrink: 0 }}>
+   533→            <i className="fas fa-file-pdf"></i>
+   534→          </div>
+   535→          <div style={{ fontWeight: 600, fontSize: '0.95rem', wordBreak: 'break-word' }}>{title}</div>
+   536→        </div>
+   537→        <button className="btn btn-sb-dark" style={{ padding: '8px 16px', borderRadius: 8, fontSize: '0.9rem', width: 'auto' }} onClick={() => openDirectPdf(node._id)}>
+   538→          <i className="fas fa-eye"></i> View
+   539→        </button>
+   540→      </div>
+   541→    );
+   542→  };
+   543→
+   544→  const renderDppItem = (t: TestItemPublic, key: string) => {
+   545→    return (
+   546→      <div className="content-card" key={key} style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+   547→        <div className="d-flex align-items-center gap-3 mb-3">
+   548→          <div style={{ background: '#fef3c7', color: '#d97706', width: 45, height: 45, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem' }}>
+   549→            <i className="fas fa-tasks"></i>
+   550→          </div>
+   551→          <div>
+   552→            <div style={{ fontWeight: 700, fontSize: '1rem' }}>{t.name}</div>
+   553→            <div style={{ color: 'var(--sb-text-muted)', fontSize: '0.8rem', marginTop: 4 }}>
+   554→              {t.totalQuestions} Qs &bull; {t.totalMarks} Marks
+   555→            </div>
+   556→          </div>
+   557→        </div>
+   558→        <button
+   559→          className="btn-dpp"
+   560→          onClick={() => openDppModal({
+   561→            testId: t._id,
+   562→            scheduleId: t.dppQuizDetails?.scheduleId || t._id,
+   563→            isAttempted: false,
+   564→            actionType: 'Start',
+   565→            testMapId: '',
+   566→          })}
+   567→        >
+   568→          Attempt Now
+   569→        </button>
+   570→      </div>
+   571→    );
+   572→  };
+   573→
+   574→  // ==================================================================
+   575→  // MAIN RENDER
+   576→  // ==================================================================
+   577→  const now = new Date();
+   578→
+   579→  const liveEvents = events.filter((e) => e.type === 'LECTURE' && e.data).filter((e) => {
+   580→    const end = new Date(e.data.endTime);
+   581→    return !(end < now && e.data.status !== 'LIVE');
+   582→  });
+   583→
+   584→  return (
+   585→    <>
+   586→      {/* ================= SIDEBAR ================= */}
+   587→      <div className={`sidebar-overlay ${sidebarOpen ? 'active' : ''}`} onClick={() => setSidebarOpen(false)}></div>
+   588→      <div className={`sidebar ${sidebarOpen ? 'active' : ''}`}>
+   589→        <div className="sidebar-header">
+   590→          <div className="logo-area">
+   591→            <span className="logo-text">study<span>bee</span>pro</span>
+   592→          </div>
+   593→          <button className="sheet-close" onClick={() => setSidebarOpen(false)} style={{ position: 'relative', top: 0, right: 0, width: 35, height: 35 }} aria-label="Close menu">
+   594→            <i className="fas fa-times"></i>
+   595→          </button>
+   596→        </div>
+   597→        <div className="sidebar-links">
+   598→          <a onClick={() => nav('study-view')} className={view === 'study-view' ? 'active' : ''} id="link-study" role="button" tabIndex={0}>
+   599→            <i className="fas fa-book-open"></i> Study Dashboard
+   600→          </a>
+   601→          <a onClick={() => nav('home-view')} className={view === 'home-view' ? 'active' : ''} id="link-courses" role="button" tabIndex={0}>
+   602→            <i className="fas fa-compass"></i> All Courses
+   603→          </a>
+   604→        </div>
+   605→        <div id="utk-credit" style={{ marginTop: 'auto', padding: 24, textAlign: 'center', borderTop: '1px solid var(--sb-border-color)', background: 'rgba(0,0,0,0.02)' }}>
+   606→          <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--sb-text-muted)', letterSpacing: '0.5px' }}>
+   607→            <i className="fas fa-code" style={{ color: 'var(--sb-text-dark)' }}></i> Developed by <br />
+   608→            <span style={{ color: 'var(--sb-primary)', fontWeight: 800, fontSize: '1.2rem', textTransform: 'uppercase', display: 'inline-block', marginTop: 5 }}>Utkarsh</span>
+   609→          </div>
+   610→        </div>
+   611→      </div>
+   612→
+   613→      {/* ================= HEADER ================= */}
+   614→      <header className="sb-header">
+   615→        <div className="d-flex align-items-center">
+   616→          <button className="menu-btn" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
+   617→            <i className="fas fa-bars-staggered"></i>
+   618→          </button>
+   619→          <a className="logo-area" onClick={() => nav('home-view')} role="button" tabIndex={0}>
+   620→            <span className="logo-text">study<span>bee</span>pro</span>
+   621→          </a>
+   622→        </div>
+   623→        <div className="d-flex align-items-center">
+   624→          <div className="nav-tab active xp-chip">
+   625→            <i className="fas fa-bolt text-warning"></i> <span>{xp} XP</span>
+   626→          </div>
+   627→        </div>
+   628→      </header>
+   629→
+   630→      <div id="app-container">
+   631→        {/* ================= HOME VIEW ================= */}
+   632→        <div id="home-view" className={`view-section ${view === 'home-view' ? 'active-view' : ''}`}>
+   633→          <div className="search-container">
+   634→            <div className="d-flex justify-content-between align-items-center mb-3">
+   635→              <h4 className="m-0" style={{ fontWeight: 800 }}>Discover Courses</h4>
+   636→              <span style={{ fontSize: '0.85rem', color: 'var(--sb-primary)', fontWeight: 700 }}>
+   637→                {searching ? <i className="fas fa-spinner fa-spin"></i> : null}
+   638→              </span>
+   639→            </div>
+   640→            <input
+   641→              type="text"
+   642→              className="search-bar"
+   643→              placeholder="Search for exams, batches..."
+   644→              value={searchTerm}
+   645→              onChange={(e) => handleSearchInput(e.target.value)}
+   646→              aria-label="Search for exams, batches"
+   647→            />
+   648→          </div>
+   649→          <div className="container px-4 pb-5">
+   650→            {catalogError ? (
+   651→              <div className="text-center p-5 text-muted">{catalogError}</div>
+   652→            ) : null}
+   653→            {!searching && batches.length === 0 && !catalogError ? (
+   654→              <div className="text-center p-5 text-muted">
+   655→                <i className="fas fa-search fa-2x mb-3" style={{ display: 'block' }}></i>
+   656→                No batches found.
+   657→              </div>
+   658→            ) : null}
+   659→            <div className="row g-4">
+   660→              {batches.map((b) => {
+   661→                const thumb = b.imageUrl || DEFAULT_THUMB;
+   662→                const isEnrolled = enrolled.includes(b._id);
+   663→                return (
+   664→                  <div className="col-12 col-md-6 col-lg-4" key={b._id}>
+   665→                    <div className="card-custom" onClick={() => openCatalogInfo(b)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openCatalogInfo(b); }}>
+   666→                      <img src={thumb} className="batch-thumb" alt={b.name} loading="lazy" />
+   667→                      <div className="card-body-custom">
+   668→                        <div className="title-text mt-2">{b.name}</div>
+   669→                        <button className="btn-sb-dark w-100 mt-auto" style={{ fontWeight: 600 }}>
+   670→                          {isEnrolled ? 'Study' : 'View Details'}
+   671→                        </button>
+   672→                      </div>
+   673→                    </div>
+   674→                  </div>
+   675→                );
+   676→              })}
+   677→            </div>
+   678→            {hasMore ? (
+   679→              <div className="text-center mt-5" id="load-more-container" style={{ display: 'block' }}>
+   680→                <button className="btn btn-sb-dark" style={{ width: 'auto', padding: '14px 40px', borderRadius: 30 }} onClick={loadNextPage}>
+   681→                  <i className="fas fa-sync-alt me-2"></i> {searching ? 'Loading...' : 'Load More'}
+   682→                </button>
+   683→              </div>
+   684→            ) : null}
+   685→          </div>
+   686→        </div>
+   687→
+   688→        {/* ================= STUDY VIEW ================= */}
+   689→        <div id="study-view" className={`view-section ${view === 'study-view' ? 'active-view' : ''}`}>
+   690→          <div className="study-header-bg">
+   691→            <div style={{ flexGrow: 1, overflow: 'hidden', paddingRight: 15 }}>
+   692→              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#9CA3AF', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '1px' }}>Selected Batch</div>
+   693→              <select
+   694→                className="batch-dropdown"
+   695→                value={currentBatchId || ''}
+   696→                onChange={(e) => setCurrentBatchId(e.target.value)}
+   697→                aria-label="Select enrolled batch"
+   698→              >
+   699→                {enrolledDetails.length === 0 ? <option value="">No batch enrolled</option> : null}
+   700→                {enrolledDetails.map((b) => (
+   701→                  <option key={b._id} value={b._id}>{b.name}</option>
+   702→                ))}
+   703→              </select>
+   704→            </div>
+   705→            <button className="back-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', margin: 0 }} onClick={openBatchInfo} aria-label="Batch info">
+   706→              <i className="fas fa-info"></i>
+   707→            </button>
+   708→          </div>
+   709→
+   710→          <div className="offerings-container pb-0">
+   711→            <div className="offering-title">Quick Access</div>
+   712→
+   713→            <div className="offering-item" onClick={openAllClasses} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openAllClasses(); }}>
+   714→              <div className="offering-icon icon-blue"><i className="fas fa-tv"></i></div>
+   715→              <div style={{ flexGrow: 1 }}>
+   716→                <span style={{ fontWeight: 800, fontSize: '1.15rem', color: 'var(--sb-text-dark)', display: 'block' }}>All Classes</span>
+   717→                <span style={{ fontSize: '0.85rem', color: 'var(--sb-text-muted)', fontWeight: 500 }}>Lectures &amp; Resources</span>
+   718→              </div>
+   719→              <i className="fas fa-chevron-right text-muted ms-auto"></i>
+   720→            </div>
+   721→
+   722→            <div className="offering-item" onClick={openAllTests} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openAllTests(); }}>
+   723→              <div className="offering-icon icon-indigo"><i className="fas fa-file-signature"></i></div>
+   724→              <div style={{ flexGrow: 1 }}>
+   725→                <span style={{ fontWeight: 800, fontSize: '1.15rem', color: 'var(--sb-text-dark)', display: 'block' }}>All Tests &amp; DPPs</span>
+   726→                <span style={{ fontSize: '0.85rem', color: 'var(--sb-text-muted)', fontWeight: 500 }}>Practice &amp; Mocks</span>
+   727→              </div>
+   728→              <i className="fas fa-chevron-right text-muted ms-auto"></i>
+   729→            </div>
+   730→          </div>
+   731→
+   732→          <div className="live-section mt-4">
+   733→            <div className="offering-title"><i className="fas fa-broadcast-tower text-danger me-2"></i> Active Events</div>
+   734→            <div id="live-classes-scroll">
+   735→              {eventsLoading ? (
+   736→                <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   737→              ) : !currentBatchId ? (
+   738→                <div className="text-center py-4">
+   739→                  <i className="fas fa-calendar-times" style={{ fontSize: '3rem', color: 'var(--sb-text-muted)', opacity: 0.5, marginBottom: 10 }}></i>
+   740→                  <h6 style={{ fontWeight: 700 }}>No batch selected</h6>
+   741→                  <p className="text-muted" style={{ fontSize: '0.85rem' }}>Enroll in a batch from All Courses to see your schedule.</p>
+   742→                </div>
+   743→              ) : liveEvents.length === 0 ? (
+   744→                <div className="text-center py-4">
+   745→                  <i className="fas fa-calendar-times" style={{ fontSize: '3rem', color: 'var(--sb-text-muted)', opacity: 0.5, marginBottom: 10 }}></i>
+   746→                  <h6 style={{ fontWeight: 700 }}>No upcoming events,</h6>
+   747→                  <p className="text-muted" style={{ fontSize: '0.85rem' }}>Perfect time to catch up on pending work!</p>
+   748→                </div>
+   749→              ) : (
+   750→                liveEvents.map((e) => {
+   751→                  const d = e.data;
+   752→                  const start = new Date(d.startTime);
+   753→                  const end = new Date(d.endTime);
+   754→                  const isLiveNow = d.status === 'LIVE' || (start <= now && end >= now);
+   755→                  const thumb = d.videoDetails?.image || DEFAULT_THUMB;
+   756→                  const time = d.startTime ? start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+   757→                  const liveUrl = `/live?videoId=${d._id}&batchId=${currentBatchId}&subjectId=${d.subjectId?._id || ''}&title=${encodeURIComponent(d.topic || '')}`;
+   758→                  const hasAttach = (d.homeworkIds && d.homeworkIds.length > 0) || (d.exerciseIds && d.exerciseIds.length > 0);
+   759→                  return (
+   760→                    <div className="live-card-vertical" key={e._id}>
+   761→                      <img src={thumb} className="live-thumb-sm" alt={d.topic} />
+   762→                      <div className="flex-grow-1">
+   763→                        {isLiveNow
+   764→                          ? <span className="live-tag">🔴LIVE NOW</span>
+   765→                          : <span className="upcoming-tag">🔔UPCOMING</span>}
+   766→                        <div style={{ fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2, marginBottom: 5, marginTop: 6, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{d.topic || d._id}</div>
+   767→                        <div className="d-flex justify-content-between align-items-center mt-2">
+   768→                          <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--sb-text-muted)' }}>
+   769→                            <i className="far fa-clock"></i> {time}
+   770→                          </div>
+   771→                          <div className="d-flex align-items-center gap-2">
+   772→                            {isLiveNow ? (
+   773→                              <button className="btn btn-sm btn-danger" onClick={() => window.open(liveUrl, '_blank')}>
+   774→                                <i className="fas fa-play"></i> Join
+   775→                              </button>
+   776→                            ) : start > now ? (
+   777→                              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--sb-text-muted)', border: '1px solid var(--sb-border-color)', padding: '4px 8px', borderRadius: 4 }}>Scheduled</span>
+   778→                            ) : null}
+   779→                            {hasAttach ? (
+   780→                              <button className="btn btn-sm btn-outline-secondary" onClick={() => openNotesModal(e._id)}>Notes</button>
+   781→                            ) : null}
+   782→                          </div>
+   783→                        </div>
+   784→                      </div>
+   785→                    </div>
+   786→                  );
+   787→                })
+   788→              )}
+   789→            </div>
+   790→          </div>
+   791→        </div>
+   792→
+   793→        {/* ================= ALL CLASSES VIEW ================= */}
+   794→        <div id="all-classes-view" className={`view-section ${view === 'all-classes-view' ? 'active-view' : ''}`}>
+   795→          <div className="breadcrumb-pw">
+   796→            <button className="back-btn" onClick={() => nav('study-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+   797→            <span>Subjects</span>
+   798→          </div>
+   799→          <div className="nav-tabs-pw">
+   800→            <div className={`nav-tab ${resourcesTab === 'subjects' ? 'active' : ''}`} id="tab-subjects" onClick={() => switchClassesTab('subjects')}>Subjects</div>
+   801→            <div className={`nav-tab ${resourcesTab === 'resources' ? 'active' : ''}`} id="tab-resources" onClick={() => switchClassesTab('resources')}>Resources</div>
+   802→          </div>
+   803→          <div className="px-4 py-3">
+   804→            {resourcesTab === 'subjects' ? (
+   805→              subjectsLoading ? (
+   806→                <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   807→              ) : subjects.length === 0 ? (
+   808→                <p className="text-muted text-center w-100">No subjects mapped.</p>
+   809→              ) : (
+   810→                <div className="row g-3" id="subjects-grid">
+   811→                  {subjects.map((sub) => (
+   812→                    <div className="col-12 col-md-6" key={sub._id}>
+   813→                      <div className="list-card" onClick={() => openSubject(sub)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openSubject(sub); }}>
+   814→                        <div className="sub-icon-letter">{sub.subject.substring(0, 2).toUpperCase()}</div>
+   815→                        <div style={{ flexGrow: 1, fontWeight: 700, fontSize: '1.05rem' }}>{sub.subject}</div>
+   816→                        <i className="fas fa-chevron-right text-muted"></i>
+   817→                      </div>
+   818→                    </div>
+   819→                  ))}
+   820→                </div>
+   821→              )
+   822→            ) : resourcesLoading ? (
+   823→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   824→            ) : resourceTopics.length === 0 ? (
+   825→              <p className="text-muted text-center p-4">No resources found.</p>
+   826→            ) : (
+   827→              <div id="resources-grid">
+   828→                {resourceTopics.map((t) => (
+   829→                  <div className="list-card" key={t._id} onClick={() => openResourceTopic(t)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openResourceTopic(t); }}>
+   830→                    <div className="sub-icon-letter" style={{ background: '#fefce8', color: '#d97706' }}><i className="fas fa-folder"></i></div>
+   831→                    <div style={{ flexGrow: 1 }}>
+   832→                      <div style={{ fontWeight: 700, fontSize: '1rem' }}>{t.name}</div>
+   833→                      <div style={{ fontSize: '0.8rem', color: 'var(--sb-text-muted)', marginTop: 2 }}>{t.notes} Notes &bull; {t.videos} Videos</div>
+   834→                    </div>
+   835→                    <i className="fas fa-chevron-right text-muted"></i>
+   836→                  </div>
+   837→                ))}
+   838→              </div>
+   839→            )}
+   840→          </div>
+   841→        </div>
+   842→
+   843→        {/* ================= CHAPTERS VIEW ================= */}
+   844→        <div id="chapters-view" className={`view-section ${view === 'chapters-view' ? 'active-view' : ''}`}>
+   845→          <div className="breadcrumb-pw">
+   846→            <button className="back-btn" onClick={() => nav('all-classes-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+   847→            <span>{currentSubject?.name || 'Subject'}</span>
+   848→          </div>
+   849→          <div className="nav-tabs-pw">
+   850→            <div className={`nav-tab ${chaptersTab === 'UNITS' ? 'active' : ''}`} id="tab-ch-chapters" onClick={() => switchChaptersTab('UNITS')}>Chapters</div>
+   851→            <div className={`nav-tab ${chaptersTab === 'STUDY_MATERIAL' ? 'active' : ''}`} id="tab-ch-study" onClick={() => switchChaptersTab('STUDY_MATERIAL')}>Study Material</div>
+   852→          </div>
+   853→          <div className="px-4 py-3" id="chapters-list">
+   854→            {chaptersLoading ? (
+   855→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   856→            ) : chapters.length === 0 ? (
+   857→              <p className="text-muted text-center p-4">Directory empty.</p>
+   858→            ) : (
+   859→              chapters.map((t, i) => {
+   860→                const code = i < 9 ? `0${i + 1}` : `${i + 1}`;
+   861→                const tagPre = chaptersTab === 'UNITS' ? 'CH' : 'SM';
+   862→                return (
+   863→                  <div className="list-card" key={t._id} onClick={() => openTopic(t)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openTopic(t); }}>
+   864→                    <div style={{ flexGrow: 1 }}>
+   865→                      <span style={{ background: 'var(--sb-primary-light)', color: 'var(--sb-primary)', fontSize: '0.75rem', fontWeight: 800, padding: '3px 8px', borderRadius: 4 }}>{tagPre} - {code}</span>
+   866→                      <div style={{ fontWeight: 700, fontSize: '1.05rem', marginTop: 8 }}>{t.name}</div>
+   867→                    </div>
+   868→                    <i className="fas fa-chevron-right text-muted ms-3"></i>
+   869→                  </div>
+   870→                );
+   871→              })
+   872→            )}
+   873→          </div>
+   874→        </div>
+   875→
+   876→        {/* ================= CONTENT VIEW ================= */}
+   877→        <div id="content-view" className={`view-section ${view === 'content-view' ? 'active-view' : ''}`}>
+   878→          <div className="breadcrumb-pw">
+   879→            <button className="back-btn" onClick={() => nav('chapters-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+   880→            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentTopic?.name || 'Chapter'}</span>
+   881→          </div>
+   882→          <div className="nav-tabs-pw" id="content-tabs">
+   883→            {[['ALL', 'All'], ['LECTURE', 'Lectures'], ['DPP_TEST', 'DPPs'], ['NOTES', 'Notes'], ['DPP_PDF', 'DPP PDFs'], ['DPP_VIDEOS', 'DPP Videos']].map(([key, label]) => (
+   884→              <div key={key} className={`nav-tab ${contentTab === key ? 'active' : ''}`} onClick={() => filterContentTab(key)}>{label}</div>
+   885→            ))}
+   886→          </div>
+   887→          <div className="px-4 py-3" id="content-list">
+   888→            {contentLoading ? (
+   889→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   890→            ) : contentTab === 'DPP_TEST' ? (
+   891→              dppItems.length === 0 ? (
+   892→                <p className="text-center text-muted p-4">No content available.</p>
+   893→              ) : (
+   894→                dppItems.map((t) => renderDppItem(t, t._id))
+   895→              )
+   896→            ) : contentNodes.length === 0 ? (
+   897→              <p className="text-center text-muted p-4">No content available.</p>
+   898→            ) : (
+   899→              contentNodes.map((node) =>
+   900→                node.data && (node.type === 'LECTURE' || node.type === 'DPP_VIDEOS')
+   901→                  ? renderLectureCard(node)
+   902→                  : node.data && (node.type === 'NOTES' || node.type === 'DPP_PDF')
+   903→                    ? renderPdfCard(node)
+   904→                    : null,
+   905→              )
+   906→            )}
+   907→          </div>
+   908→        </div>
+   909→
+   910→        {/* ================= ALL TESTS VIEW ================= */}
+   911→        <div id="all-tests-view" className={`view-section ${view === 'all-tests-view' ? 'active-view' : ''}`}>
+   912→          <div className="breadcrumb-pw">
+   913→            <button className="back-btn" onClick={() => nav('study-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+   914→            <span>Assessments</span>
+   915→          </div>
+   916→          <div className="px-4 py-3" id="tests-list">
+   917→            {testsLoading ? (
+   918→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   919→            ) : tests.length === 0 ? (
+   920→              <p className="text-muted text-center p-4">No tests configured.</p>
+   921→            ) : (
+   922→              tests.map((t) => (
+   923→                <div className="content-card" key={t._id} style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+   924→                  <div className="d-flex align-items-center gap-3 mb-3">
+   925→                    <div style={{ background: '#fef3c7', color: '#d97706', width: 45, height: 45, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem' }}>
+   926→                      <i className="fas fa-tasks"></i>
+   927→                    </div>
+   928→                    <div>
+   929→                      <div style={{ fontWeight: 700, fontSize: '1rem' }}>{t.name || t._id}</div>
+   930→                      <div style={{ color: 'var(--sb-text-muted)', fontSize: '0.8rem', marginTop: 4 }}>
+   931→                        {t.totalQuestions} Qs &bull; {t.totalMarks} Marks
+   932→                      </div>
+   933→                    </div>
+   934→                  </div>
+   935→                  {testPreparing === t._id ? (
+   936→                    <button className="btn-dpp" disabled><i className="fas fa-spinner fa-spin"></i> Preparing...</button>
+   937→                  ) : (
+   938→                    <button className="btn-dpp" onClick={() => launchTestGateway(t._id)}>Attempt Now</button>
+   939→                  )}
+   940→                </div>
+   941→              ))
+   942→            )}
+   943→          </div>
+   944→        </div>
+   945→      </div>
+   946→
+   947→      {/* ================= BATCH INFO MODAL ================= */}
+   948→      <div className={`modal-overlay ${batchInfoOpen ? 'active' : ''}`} id="batch-info-modal" onClick={(e) => { if (e.target === e.currentTarget) setBatchInfoOpen(false); }}>
+   949→        <div className="bottom-sheet" style={{ padding: 0, overflow: 'hidden' }}>
+   950→          <i className="fas fa-times sheet-close" onClick={() => setBatchInfoOpen(false)}></i>
+   951→          <div id="batch-info-content">
+   952→            {batchInfoLoading ? (
+   953→              <div className="loader-center" style={{ padding: '100px 0' }}><i className="fas fa-spinner fa-spin"></i> Fetching Details...</div>
+   954→            ) : !batchInfo ? (
+   955→              <p className="text-center text-muted p-5">Batch details not available.</p>
+   956→            ) : (() => {
+   957→              const thumb = imageUrl(batchInfo.imageUrl, DEFAULT_THUMB);
+   958→              const priceText =
+   959→                batchInfo.amount == null
+   960→                  ? ''
+   961→                  : batchInfo.amount === 0
+   962→                    ? 'Free'
+   963→                    : `₹${batchInfo.amount.toLocaleString('en-IN')}`;
+   964→              const sDate = batchInfo.startDate ? new Date(batchInfo.startDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'TBA';
+   965→              const eDate = batchInfo.endDate ? new Date(batchInfo.endDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'TBA';
+   966→              const isEnrolled = enrolled.includes(batchInfo._id);
+   967→              return (
+   968→                <>
+   969→                  <div style={{ background: `url('${thumb}') center/cover`, height: 200, width: '100%', borderRadius: '20px 20px 0 0', position: 'relative' }}>
+   970→                    <div style={{ position: 'absolute', bottom: 0, left: 0, width: '100%', height: '50%', background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)' }}></div>
+   971→                    {priceText ? <div className="badge bg-danger position-absolute top-0 end-0 m-3 fs-6">{priceText}</div> : null}
+   972→                  </div>
+   973→                  <div className="p-4 pt-3">
+   974→                    <h4 className="fw-bold mb-1">{batchInfo.name}</h4>
+   975→                    {batchInfo.byName ? (
+   976→                      <div style={{ color: 'var(--sb-text-muted)', fontWeight: 600, fontSize: '0.9rem', marginBottom: 10 }}>{batchInfo.byName}</div>
+   977→                    ) : null}
+   978→
+   979→                    {batchInfo.exams.length > 0 ? (
+   980→                      <div style={{ marginBottom: 14 }}>
+   981→                        {batchInfo.exams.map((exam, i) => (
+   982→                          <span key={i} style={{ background: '#fef3c7', color: '#d97706', border: '1px solid #fde68a', fontSize: '0.7rem', fontWeight: 700, padding: '4px 10px', borderRadius: 20, display: 'inline-block', marginRight: 8, marginBottom: 8 }}>
+   983→                            {exam}
+   984→                          </span>
+   985→                        ))}
+   986→                      </div>
+   987→                    ) : null}
+   988→
+   989→                    <div className="batch-grid-info">
+   990→                      <div className="bg-info-box"><span className="lbl">Class</span><span className="val">{batchInfo.className || 'General'}</span></div>
+   991→                      <div className="bg-info-box"><span className="lbl">Language</span><span className="val">{batchInfo.language || 'Hinglish'}</span></div>
+   992→                      <div className="bg-info-box"><span className="lbl">Start Date</span><span className="val">{sDate}</span></div>
+   993→                      <div className="bg-info-box"><span className="lbl">End Date</span><span className="val">{eDate}</span></div>
+   994→                    </div>
+   995→
+   996→                    <h6 className="fw-bold mt-4 mb-2">About Batch</h6>
+   997→                    <div className="batch-desc-text">{batchInfo.byName || 'No description available for this batch.'}</div>
+   998→
+   999→                    {isEnrolled ? (
+  1000→                      <>
+  1001→                        <button className="btn btn-sb-dark w-100 mt-4 fw-bold rounded-pill" onClick={() => studyBatch(batchInfo._id)}>
+  1002→                          <i className="fas fa-book-open me-2"></i> Study This Batch
+  1003→                        </button>
+  1004→                        <button className="btn btn-outline-danger w-100 mt-3 fw-bold rounded-pill" onClick={() => handleUnenroll(batchInfo._id)}>
+  1005→                          <i className="fas fa-sign-out-alt me-2"></i> Unenroll from Batch
+  1006→                        </button>
+  1007→                      </>
+  1008→                    ) : (
+  1009→                      <button className="btn btn-sb-dark w-100 mt-4 fw-bold rounded-pill" onClick={() => enrollInBatch(batchInfo._id)}>
+  1010→                        <i className="fas fa-graduation-cap me-2"></i> Enroll Now
+  1011→                      </button>
+  1012→                    )}
+  1013→                  </div>
+  1014→                </>
+  1015→              );
+  1016→            })()}
+  1017→          </div>
+  1018→        </div>
+  1019→      </div>
+  1020→
+  1021→      {/* ================= NOTES MODAL ================= */}
+  1022→      <div className={`modal-overlay ${notesOpen ? 'active' : ''}`} id="notes-modal" onClick={(e) => { if (e.target === e.currentTarget) setNotesOpen(false); }}>
+  1023→        <div className="bottom-sheet">
+  1024→          <i className="fas fa-times sheet-close" onClick={() => setNotesOpen(false)}></i>
+  1025→          <h4 style={{ fontWeight: 800, marginBottom: 24, color: 'var(--sb-text-dark)' }}>Attachments</h4>
+  1026→          <div id="notes-modal-content">
+  1027→            {notesLoading ? (
+  1028→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+  1029→            ) : (
+  1030→              <>
+  1031→                {noteRows.map((row, i) => (
+  1032→                  <div className="resource-row" key={`n-${i}`}>
+  1033→                    <div className="resource-title"><i className="fas fa-file-pdf text-danger"></i> {row.title}</div>
+  1034→                    <button className="btn-view-pdf" onClick={() => { window.open(row.url, '_blank'); addXP(5, 'Viewed Document'); }}>View</button>
+  1035→                  </div>
+  1036→                ))}
+  1037→                {noteDppRows.map((row, i) => (
+  1038→                  <div className="resource-row" key={`d-${i}`}>
+  1039→                    <div className="resource-title"><i className="fas fa-tasks text-warning"></i> {row.name}</div>
+  1040→                    <button
+  1041→                      className="btn-view-pdf"
+  1042→                      style={{ background: '#fef08a', color: '#a16207', fontWeight: 700 }}
+  1043→                      onClick={() => {
+  1044→                        setNotesOpen(false);
+  1045→                        openDppModal(row);
+  1046→                      }}
+  1047→                    >
+  1048→                      Attempt
+  1049→                    </button>
+  1050→                  </div>
+  1051→                ))}
+  1052→                {noteRows.length === 0 && noteDppRows.length === 0 && !notesLoading ? (
+  1053→                  <p className="text-muted text-center">No resources attached.</p>
+  1054→                ) : null}
+  1055→              </>
+  1056→            )}
+  1057→          </div>
+  1058→        </div>
+  1059→      </div>
+  1060→
+  1061→      {/* ================= DPP MODAL ================= */}
+  1062→      <div className={`modal-overlay ${dppOpen ? 'active' : ''}`} id="dpp-modal" onClick={(e) => { if (e.target === e.currentTarget) setDppOpen(false); }}>
+  1063→        <div className="bottom-sheet">
+  1064→          <i className="fas fa-times sheet-close" onClick={() => setDppOpen(false)}></i>
+  1065→          <h4 style={{ fontWeight: 800, marginBottom: 24, color: 'var(--sb-text-dark)' }}>Choose Attempt Mode</h4>
+  1066→          <div id="dpp-modal-content" className="d-flex flex-column gap-3">
+  1067→            <div className="resource-row" style={{ background: '#eff6ff', border: '1px solid #2563eb', cursor: 'pointer' }} onClick={() => launchDpp('BATCH_QUIZ')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') launchDpp('BATCH_QUIZ'); }}>
+  1068→              <div>
+  1069→                <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#2563eb' }}>Practice Mode</div>
+  1070→                <div style={{ fontSize: '0.8rem', color: 'var(--sb-text-dark)', marginTop: 4 }}>Learn without time pressure</div>
+  1071→              </div>
+  1072→              <i className="fas fa-chevron-right" style={{ color: '#2563eb' }}></i>
+  1073→            </div>
+  1074→            <div className="resource-row" style={{ background: '#fef2f2', border: '1px solid #e11d48', cursor: 'pointer' }} onClick={() => launchDpp('DPP_QUIZ_MODE')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') launchDpp('DPP_QUIZ_MODE'); }}>
+  1075→              <div>
+  1076→                <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#e11d48' }}>Quiz Mode</div>
+  1077→                <div style={{ fontSize: '0.8rem', color: 'var(--sb-text-dark)', marginTop: 4 }}>Attempt with standard timing</div>
+  1078→              </div>
+  1079→              <i className="fas fa-chevron-right" style={{ color: '#e11d48' }}></i>
+  1080→            </div>
+  1081→          </div>
+  1082→        </div>
+  1083→      </div>
+  1084→
+  1085→      {/* ================= TEST IFRAME MODAL ================= */}
+  1086→      <div className={`iframe-overlay ${testFrame.open ? 'active' : ''}`} id="test-iframe-modal">
+  1087→        <div className="iframe-header">
+  1088→          <h5 className="m-0" style={{ fontWeight: 800, color: 'var(--sb-text-dark)' }}>{testFrame.title}</h5>
+  1089→          <button className="btn btn-sm btn-danger fw-bold rounded-pill px-3" onClick={() => setTestFrame({ open: false, url: '', title: 'Test Attempt' })}>
+  1090→            <i className="fas fa-times me-1"></i> Close
+  1091→          </button>
+  1092→        </div>
+  1093→        <iframe id="test-iframe" className="iframe-content" src={testFrame.open ? testFrame.url : undefined} title={testFrame.title} />
+  1094→      </div>
+  1095→    </>
+  1096→  );
+  1097→}
+  1098→

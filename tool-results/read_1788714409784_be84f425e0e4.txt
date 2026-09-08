@@ -1,0 +1,979 @@
+     1→     1→// ============================================================================
+     2→     2→// StudyBee engine — batch catalog + curriculum content engine.
+     3→     3→//
+     4→     4→// Catalog: 14,929 real batches (studystark batches.json) with real metadata.
+     5→     5→// Content: deterministic curriculum engine — every batch gets subjects,
+     6→     6→// chapters, lectures, notes, DPPs, tests, schedule and notifications derived
+     7→     7→// from its real exam/class metadata (seeded by batch id, stable across calls).
+     8→     8→// ============================================================================
+     9→     9→
+    10→    10→import fs from 'fs';
+    11→    11→import path from 'path';
+    12→    12→import {
+    13→    13→  hashSeed,
+    14→    14→  makeRng,
+    15→    15→  stableId,
+    16→    16→  pickSubjects,
+    17→    17→  isShortCourse,
+    18→    18→  LECTURE_SUBTOPICS,
+    19→    19→  STUDY_MATERIAL_TITLES,
+    20→    20→  NOTIF_TEMPLATES,
+    21→    21→  SAMPLE_VIDEOS,
+    22→    22→  posterFor,
+    23→    23→  teacherFor,
+    24→    24→  quizBankForSubject,
+    25→    25→  SubjectTemplate,
+    26→    26→} from './curriculum';
+    27→    27→import { pwStreamUrl, pwStreamLive, PW_QUALITIES } from './pw-stream';
+    28→    28→
+    29→    29→/**
+    30→    30→ * Lecture video URL — the real PW CloudFront HLS lecture (through our
+    31→    31→ * same-origin /api/stream proxy) while the signed policy is valid; falls
+    32→    32→ * back to the self-hosted clips afterwards.
+    33→    33→ */
+    34→    34→function lectureVideoUrl(seed: string): string {
+    35→    35→  if (pwStreamLive()) {
+    36→    36→    const q = PW_QUALITIES[hashSeed(seed) % PW_QUALITIES.length];
+    37→    37→    return pwStreamUrl(q);
+    38→    38→  }
+    39→    39→  return SAMPLE_VIDEOS[hashSeed(seed) % SAMPLE_VIDEOS.length];
+    40→    40→}
+    41→    41→
+    42→    42→// ---------------------------------------------------------------------------
+    43→    43→// Raw catalog record (as stored in src/data/all_batches.json)
+    44→    44→// ---------------------------------------------------------------------------
+    45→    45→export interface CatalogBatch {
+    46→    46→  id: string;
+    47→    47→  batch_id: string;
+    48→    48→  name: string;
+    49→    49→  byName: string;
+    50→    50→  exam: string[];
+    51→    51→  language: string;
+    52→    52→  class: string;
+    53→    53→  amount: number | null;
+    54→    54→  photo: string;
+    55→    55→  start_date: string;
+    56→    56→  end_date: string;
+    57→    57→}
+    58→    58→
+    59→    59→// ---------------------------------------------------------------------------
+    60→    60→// API-facing shapes
+    61→    61→// ---------------------------------------------------------------------------
+    62→    62→export interface BatchDetail {
+    63→    63→  _id: string; // batch_id (real PW id)
+    64→    64→  id: string; // numeric catalog id
+    65→    65→  name: string;
+    66→    66→  byName: string;
+    67→    67→  imageUrl: string;
+    68→    68→  exams: string[];
+    69→    69→  language: string;
+    70→    70→  className: string;
+    71→    71→  amount: number | null;
+    72→    72→  startDate: string;
+    73→    73→  endDate: string;
+    74→    74→  subjects: BatchSubject[];
+    75→    75→}
+    76→    76→
+    77→    77→export interface BatchSubject {
+    78→    78→  _id: string;
+    79→    79→  subject: string;
+    80→    80→  subjectId: string;
+    81→    81→}
+    82→    82→
+    83→    83→export interface CatalogResult {
+    84→    84→  total: number;
+    85→    85→  page: number;
+    86→    86→  limit: number;
+    87→    87→  hasMore: boolean;
+    88→    88→  data: BatchDetail[];
+    89→    89→}
+    90→    90→
+    91→    91→// ---------------------------------------------------------------------------
+    92→    92→// Catalog loading (fs read + in-memory cache, avoids bundling 5 MB JSON)
+    93→    93→// ---------------------------------------------------------------------------
+    94→    94→let catalogCache: CatalogBatch[] | null = null;
+    95→    95→
+    96→    96→function loadCatalog(): CatalogBatch[] {
+    97→    97→  if (catalogCache) return catalogCache;
+    98→    98→  const file = path.join(process.cwd(), 'src', 'data', 'all_batches.json');
+    99→    99→  try {
+   100→   100→    const raw = fs.readFileSync(file, 'utf-8');
+   101→   101→    const parsed = JSON.parse(raw);
+   102→   102→    catalogCache = Array.isArray(parsed) ? (parsed as CatalogBatch[]) : [];
+   103→   103→  } catch {
+   104→   104→    catalogCache = [];
+   105→   105→  }
+   106→   106→  return catalogCache;
+   107→   107→}
+   108→   108→
+   109→   109→/** Catalog item -> API detail shape (same object powers catalog cards). */
+   110→   110→function toDetail(b: CatalogBatch): BatchDetail {
+   111→   111→  return {
+   112→   112→    _id: b.batch_id,
+   113→   113→    id: b.id,
+   114→   114→    name: b.name,
+   115→   115→    byName: b.byName,
+   116→   116→    imageUrl: b.photo,
+   117→   117→    exams: Array.isArray(b.exam) ? b.exam : [],
+   118→   118→    language: b.language,
+   119→   119→    className: b.class,
+   120→   120→    amount: typeof b.amount === 'number' ? b.amount : null,
+   121→   121→    startDate: b.start_date,
+   122→   122→    endDate: b.end_date,
+   123→   123→    subjects: [],
+   124→   124→  };
+   125→   125→}
+   126→   126→
+   127→   127→// ---------------------------------------------------------------------------
+   128→   128→// Catalog search — 20/page, search by name / id / byName.
+   129→   129→// (Catalog rows keep subjects empty: building content bundles per row would
+   130→   130→// be wasteful; subjects are attached on pw_btch_dtl / single-batch detail.)
+   131→   131→// ---------------------------------------------------------------------------
+   132→   132→export function searchCatalog(query: string, page: number, limit: number): CatalogResult {
+   133→   133→  const catalog = loadCatalog();
+   134→   134→  const q = (query || '').trim().toLowerCase();
+   135→   135→
+   136→   136→  const filtered = q
+   137→   137→    ? catalog.filter(
+   138→   138→        (b) =>
+   139→   139→          b.name.toLowerCase().includes(q) ||
+   140→   140→          b.batch_id.toLowerCase().includes(q) ||
+   141→   141→          b.id.toLowerCase().includes(q) ||
+   142→   142→          b.byName.toLowerCase().includes(q),
+   143→   143→      )
+   144→   144→    : catalog;
+   145→   145→
+   146→   146→  const safeLimit = Math.min(100, Math.max(1, limit));
+   147→   147→  const safePage = Math.max(1, page);
+   148→   148→  const start = (safePage - 1) * safeLimit;
+   149→   149→  const slice = filtered.slice(start, start + safeLimit);
+   150→   150→
+   151→   151→  return {
+   152→   152→    total: filtered.length,
+   153→   153→    page: safePage,
+   154→   154→    limit: safeLimit,
+   155→   155→    hasMore: start + safeLimit < filtered.length,
+   156→   156→    data: slice.map(toDetail),
+   157→   157→  };
+   158→   158→}
+   159→   159→
+   160→   160→// ---------------------------------------------------------------------------
+   161→   161→// Batch detail — real metadata + generated subject mapping.
+   162→   162→// ---------------------------------------------------------------------------
+   163→   163→export function getBatchDetail(batchId: string): BatchDetail | null {
+   164→   164→  const catalog = loadCatalog();
+   165→   165→  const id = (batchId || '').trim().toLowerCase();
+   166→   166→  if (!id) return null;
+   167→   167→  const found = catalog.find((b) => b.batch_id.toLowerCase() === id);
+   168→   168→  if (!found) return null;
+   169→   169→  const detail = toDetail(found);
+   170→   170→  detail.subjects = getSubjects(found.batch_id);
+   171→   171→  return detail;
+   172→   172→}
+   173→   173→
+   174→   174→// ============================================================================
+   175→   175→// CONTENT ENGINE — deterministic curriculum per batch
+   176→   176→// ============================================================================
+   177→   177→
+   178→   178→interface LectureRef {
+   179→   179→  nodeId: string;
+   180→   180→  videoId: string;
+   181→   181→  topic: string;
+   182→   182→  subtopic: string;
+   183→   183→  date: string; // ISO
+   184→   184→  duration: string;
+   185→   185→  chapterId: string;
+   186→   186→  chapterName: string;
+   187→   187→  subjectId: string;
+   188→   188→  subjectName: string;
+   189→   189→  subjectTeacher: string;
+   190→   190→  notesDocId: string;
+   191→   191→  dppRefs: Array<{ id: string; docId: string; title: string }>;
+   192→   192→}
+   193→   193→
+   194→   194→interface NotesRef {
+   195→   195→  nodeId: string;
+   196→   196→  topic: string;
+   197→   197→  chapterId: string;
+   198→   198→  chapterName: string;
+   199→   199→  docId: string;
+   200→   200→  date: string;
+   201→   201→}
+   202→   202→
+   203→   203→interface ChapterRef {
+   204→   204→  id: string;
+   205→   205→  name: string;
+   206→   206→  subjectId: string;
+   207→   207→  subjectName: string;
+   208→   208→  lectureCount: number;
+   209→   209→  notesCount: number;
+   210→   210→  dppCount: number;
+   211→   211→}
+   212→   212→
+   213→   213→interface DppRef {
+   214→   214→  testId: string; // also used as exercise/content id
+   215→   215→  name: string;
+   216→   216→  chapterId: string;
+   217→   217→  chapterName: string;
+   218→   218→  subjectId: string;
+   219→   219→  subjectName: string;
+   220→   220→  totalQuestions: number;
+   221→   221→  totalMarks: number;
+   222→   222→  docId: string;
+   223→   223→}
+   224→   224→
+   225→   225→interface BigTestRef {
+   226→   226→  testId: string;
+   227→   227→  name: string;
+   228→   228→  subjectName: string;
+   229→   229→  totalQuestions: number;
+   230→   230→  totalMarks: number;
+   231→   231→  duration: number; // minutes
+   232→   232→  kind: 'PART' | 'MOCK';
+   233→   233→}
+   234→   234→
+   235→   235→interface SubjectData {
+   236→   236→  id: string;
+   237→   237→  name: string;
+   238→   238→  icon: string;
+   239→   239→  chapters: ChapterRef[];
+   240→   240→  lectures: LectureRef[];
+   241→   241→  notes: NotesRef[];
+   242→   242→  dpps: DppRef[];
+   243→   243→  teacher: { name: string; qualification: string; experience: number };
+   244→   244→}
+   245→   245→
+   246→   246→interface BatchContent {
+   247→   247→  batch: CatalogBatch;
+   248→   248→  short: boolean;
+   249→   249→  subjects: SubjectData[];
+   250→   250→  bigTests: BigTestRef[];
+   251→   251→}
+   252→   252→
+   253→   253→const bundleCache = new Map<string, BatchContent>();
+   254→   254→const BUNDLE_CACHE_MAX = 150;
+   255→   255→
+   256→   256→function findBatch(batchId: string): CatalogBatch | null {
+   257→   257→  const id = (batchId || '').trim().toLowerCase();
+   258→   258→  if (!id) return null;
+   259→   259→  return loadCatalog().find((b) => b.batch_id.toLowerCase() === id) ?? null;
+   260→   260→}
+   261→   261→
+   262→   262→function docFileId(kind: 'NOTE' | 'DPP', title: string, subject: string, chapter: string): string {
+   263→   263→  const payload = JSON.stringify({ k: kind, t: title, s: subject, c: chapter });
+   264→   264→  const b64 = Buffer.from(payload, 'utf-8').toString('base64url');
+   265→   265→  return `d_${b64}`;
+   266→   266→}
+   267→   267→
+   268→   268→function fmtDuration(rng: ReturnType<typeof makeRng>): string {
+   269→   269→  const h = rng.int(0, 2);
+   270→   270→  const m = rng.int(8, 55);
+   271→   271→  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+   272→   272→}
+   273→   273→
+   274→   274→/** Spread n lecture dates evenly over the batch validity window (capped at now + 30d). */
+   275→   275→function lectureDates(startDate: string, endDate: string, n: number): string[] {
+   276→   276→  const now = Date.now();
+   277→   277→  let start = new Date(startDate || '').getTime();
+   278→   278→  let end = new Date(endDate || '').getTime();
+   279→   279→  if (!Number.isFinite(start)) start = now - 90 * 86400000;
+   280→   280→  if (!Number.isFinite(end)) end = start + 120 * 86400000;
+   281→   281→  start = Math.max(start, now - 90 * 86400000);
+   282→   282→  end = Math.min(end, now + 30 * 86400000);
+   283→   283→  if (end <= start) end = start + 86400000;
+   284→   284→  const out: string[] = [];
+   285→   285→  for (let i = 0; i < n; i++) {
+   286→   286→    const frac = (i + 1) / (n + 1);
+   287→   287→    out.push(new Date(start + frac * (end - start)).toISOString());
+   288→   288→  }
+   289→   289→  return out;
+   290→   290→}
+   291→   291→
+   292→   292→function pad(n: number): string {
+   293→   293→  return n < 10 ? `0${n}` : String(n);
+   294→   294→}
+   295→   295→
+   296→   296→function getBatchContent(batchId: string): BatchContent | null {
+   297→   297→  const batch = findBatch(batchId);
+   298→   298→  if (!batch) return null;
+   299→   299→
+   300→   300→  const cached = bundleCache.get(batch.batch_id);
+   301→   301→  if (cached) return cached;
+   302→   302→
+   303→   303→  const short = isShortCourse(batch.name, batch.byName);
+   304→   304→  const templates: SubjectTemplate[] = pickSubjects({
+   305→   305→    name: batch.name,
+   306→   306→    byName: batch.byName,
+   307→   307→    exam: Array.isArray(batch.exam) ? batch.exam : [],
+   308→   308→    className: batch.class || '',
+   309→   309→  });
+   310→   310→
+   311→   311→  const subjects: SubjectData[] = templates.map((tpl) => {
+   312→   312→    const subjectId = stableId('sub', batch.batch_id, tpl.subject);
+   313→   313→    const rngChapters = makeRng('chapters', batch.batch_id, tpl.subject);
+   314→   314→
+   315→   315→    const bank = tpl.chapters;
+   316→   316→    const chapterCount = short ? rngChapters.int(5, 8) : Math.min(bank.length, rngChapters.int(8, 14));
+   317→   317→    const chapters: ChapterRef[] = [];
+   318→   318→    const lectures: LectureRef[] = [];
+   319→   319→    const notes: NotesRef[] = [];
+   320→   320→    const dpps: DppRef[] = [];
+   321→   321→
+   322→   322→    const pickedChapters = short ? rngChapters.sample(bank, chapterCount) : bank.slice(0, chapterCount);
+   323→   323→
+   324→   324→    pickedChapters.forEach((chapterName, ci) => {
+   325→   325→      const chapterId = stableId('ch', batch.batch_id, tpl.subject, chapterName);
+   326→   326→      const rng = makeRng('chapter', batch.batch_id, chapterName);
+   327→   327→
+   328→   328→      const lectureCount = short ? rng.int(3, 5) : rng.int(4, 9);
+   329→   329→      const notesCount = short ? 1 : rng.int(1, 2);
+   330→   330→      const dppCount = short ? rng.int(1, 3) : rng.int(2, 4);
+   331→   331→
+   332→   332→      chapters.push({
+   333→   333→        id: chapterId,
+   334→   334→        name: chapterName,
+   335→   335→        subjectId,
+   336→   336→        subjectName: tpl.subject,
+   337→   337→        lectureCount,
+   338→   338→        notesCount,
+   339→   339→        dppCount,
+   340→   340→      });
+   341→   341→
+   342→   342→      const dates = lectureDates(batch.start_date, batch.end_date, lectureCount);
+   343→   343→      const subtopics = rng.shuffle(LECTURE_SUBTOPICS);
+   344→   344→
+   345→   345→      // DPP refs for this chapter (shared across its lectures).
+   346→   346→      const chapterDpps: DppRef[] = [];
+   347→   347→      for (let di = 0; di < dppCount; di++) {
+   348→   348→        const dppId = stableId('dpp', batch.batch_id, chapterId, di);
+   349→   349→        const questions = short ? rng.int(5, 8) : rng.int(8, 15);
+   350→   350→        chapterDpps.push({
+   351→   351→          testId: dppId,
+   352→   352→          name: `DPP ${pad(di + 1)} : ${chapterName}`,
+   353→   353→          chapterId,
+   354→   354→          chapterName,
+   355→   355→          subjectId,
+   356→   356→          subjectName: tpl.subject,
+   357→   357→          totalQuestions: questions,
+   358→   358→          totalMarks: questions * 4,
+   359→   359→          docId: docFileId('DPP', `${chapterName} — DPP ${pad(di + 1)}`, tpl.subject, chapterName),
+   360→   360→        });
+   361→   361→      }
+   362→   362→      dpps.push(...chapterDpps);
+   363→   363→
+   364→   364→      for (let li = 0; li < lectureCount; li++) {
+   365→   365→        const nodeId = stableId('lec', batch.batch_id, chapterId, li);
+   366→   366→        const videoId = stableId('vid', batch.batch_id, chapterId, li);
+   367→   367→        const subtopic = subtopics[li % subtopics.length];
+   368→   368→        const linked = chapterDpps.length > 0 ? [chapterDpps[li % chapterDpps.length]] : [];
+   369→   369→        lectures.push({
+   370→   370→          nodeId,
+   371→   371→          videoId,
+   372→   372→          topic: `Lecture ${pad(li + 1)} : ${subtopic}`,
+   373→   373→          subtopic,
+   374→   374→          date: dates[li],
+   375→   375→          duration: fmtDuration(rng),
+   376→   376→          chapterId,
+   377→   377→          chapterName,
+   378→   378→          subjectId,
+   379→   379→          subjectName: tpl.subject,
+   380→   380→          subjectTeacher: '', // filled after teacher selection below
+   381→   381→          notesDocId: docFileId('NOTE', `${chapterName} — Class Notes`, tpl.subject, chapterName),
+   382→   382→          dppRefs: linked.map((d) => ({ id: d.testId, docId: d.docId, title: d.name })),
+   383→   383→        });
+   384→   384→      }
+   385→   385→
+   386→   386→      for (let ni = 0; ni < notesCount; ni++) {
+   387→   387→        const title = STUDY_MATERIAL_TITLES[(ci + ni) % STUDY_MATERIAL_TITLES.length];
+   388→   388→        notes.push({
+   389→   389→          nodeId: stableId('nt', batch.batch_id, chapterId, ni),
+   390→   390→          topic: `${chapterName} : ${title}`,
+   391→   391→          chapterId,
+   392→   392→          chapterName,
+   393→   393→          docId: docFileId('NOTE', `${chapterName} — ${title}`, tpl.subject, chapterName),
+   394→   394→          date: dates[Math.min(ni, dates.length - 1)] ?? new Date().toISOString(),
+   395→   395→        });
+   396→   396→      }
+   397→   397→    });
+   398→   398→
+   399→   399→    const t = teacherFor([batch.batch_id, tpl.subject]);
+   400→   400→    const teacher = { name: t.name, qualification: t.qualification, experience: t.experience };
+   401→   401→    for (const l of lectures) l.subjectTeacher = teacher.name;
+   402→   402→
+   403→   403→    return {
+   404→   404→      id: subjectId,
+   405→   405→      name: tpl.subject,
+   406→   406→      icon: tpl.icon,
+   407→   407→      chapters,
+   408→   408→      lectures,
+   409→   409→      notes,
+   410→   410→      dpps,
+   411→   411→      teacher,
+   412→   412→    };
+   413→   413→  });
+   414→   414→
+   415→   415→  // Part tests & full mocks
+   416→   416→  const rngTests = makeRng('tests', batch.batch_id);
+   417→   417→  const bigTests: BigTestRef[] = [];
+   418→   418→  const partCount = short ? rngTests.int(1, 2) : rngTests.int(2, 4);
+   419→   419→  for (let i = 0; i < partCount; i++) {
+   420→   420→    const subjectName = subjects.length > 0 ? subjects[i % subjects.length].name : 'General';
+   421→   421→    const qs = rngTests.int(12, 18);
+   422→   422→    bigTests.push({
+   423→   423→      testId: stableId('tst', batch.batch_id, 'part', i),
+   424→   424→      name: `Part Test ${pad(i + 1)} : ${subjectName}`,
+   425→   425→      subjectName,
+   426→   426→      totalQuestions: qs,
+   427→   427→      totalMarks: qs * 4,
+   428→   428→      duration: Math.max(30, Math.round((qs * 1.5) / 5) * 5),
+   429→   429→      kind: 'PART',
+   430→   430→    });
+   431→   431→  }
+   432→   432→  const mockCount = short ? rngTests.int(1, 2) : rngTests.int(2, 3);
+   433→   433→  for (let i = 0; i < mockCount; i++) {
+   434→   434→    const qs = rngTests.int(20, 28);
+   435→   435→    bigTests.push({
+   436→   436→      testId: stableId('tst', batch.batch_id, 'mock', i),
+   437→   437→      name: `Full Syllabus Mock ${pad(i + 1)}`,
+   438→   438→      subjectName: subjects.length > 0 ? subjects[i % subjects.length].name : 'General',
+   439→   439→      totalQuestions: qs,
+   440→   440→      totalMarks: qs * 4,
+   441→   441→      duration: Math.max(45, Math.round((qs * 1.5) / 5) * 5),
+   442→   442→      kind: 'MOCK',
+   443→   443→    });
+   444→   444→  }
+   445→   445→
+   446→   446→  const bundle: BatchContent = { batch, short, subjects, bigTests };
+   447→   447→  if (bundleCache.size >= BUNDLE_CACHE_MAX) {
+   448→   448→    const first = bundleCache.keys().next().value;
+   449→   449→    if (first) bundleCache.delete(first);
+   450→   450→  }
+   451→   451→  bundleCache.set(batch.batch_id, bundle);
+   452→   452→  return bundle;
+   453→   453→}
+   454→   454→
+   455→   455→// --------------------------- subjects & chapters ----------------------------
+   456→   456→
+   457→   457→export function getSubjects(batchId: string): BatchSubject[] {
+   458→   458→  const bundle = getBatchContent(batchId);
+   459→   459→  if (!bundle) return [];
+   460→   460→  return bundle.subjects.map((s) => ({ _id: s.id, subject: s.name, subjectId: s.id }));
+   461→   461→}
+   462→   462→
+   463→   463→export interface ChapterItem {
+   464→   464→  _id: string;
+   465→   465→  name: string;
+   466→   466→  typeId: string;
+   467→   467→  notes: number;
+   468→   468→  videos: number;
+   469→   469→  order: number;
+   470→   470→}
+   471→   471→
+   472→   472→export function getChapters(
+   473→   473→  batchId: string,
+   474→   474→  subjectId: string,
+   475→   475→  tagType: string,
+   476→   476→  page = 1,
+   477→   477→  limit = 50,
+   478→   478→): ChapterItem[] {
+   479→   479→  const bundle = getBatchContent(batchId);
+   480→   480→  if (!bundle) return [];
+   481→   481→  const subject = bundle.subjects.find((s) => s.id === subjectId);
+   482→   482→  if (!subject) return [];
+   483→   483→
+   484→   484→  let items: ChapterItem[];
+   485→   485→  if (tagType === 'STUDY_MATERIAL') {
+   486→   486→    items = subject.notes.map((n) => ({
+   487→   487→      _id: n.nodeId,
+   488→   488→      name: n.topic,
+   489→   489→      typeId: subject.id,
+   490→   490→      notes: 1,
+   491→   491→      videos: 0,
+   492→   492→      order: 0,
+   493→   493→    }));
+   494→   494→  } else {
+   495→   495→    items = subject.chapters.map((c, i) => ({
+   496→   496→      _id: c.id,
+   497→   497→      name: c.name,
+   498→   498→      typeId: subject.id,
+   499→   499→      notes: c.notesCount + c.dppCount,
+   500→   500→      videos: c.lectureCount,
+   501→   501→      order: i,
+   502→   502→    }));
+   503→   503→  }
+   504→   504→  const start = (Math.max(1, page) - 1) * limit;
+   505→   505→  return items.slice(start, start + Math.max(1, limit));
+   506→   506→}
+   507→   507→
+   508→   508→export function getResourceTopics(batchId: string, subjectIds: string): ChapterItem[] {
+   509→   509→  const bundle = getBatchContent(batchId);
+   510→   510→  if (!bundle) return [];
+   511→   511→  const wanted = (subjectIds || '').split(',').map((s) => s.trim()).filter(Boolean);
+   512→   512→  const subjects = wanted.length > 0 ? bundle.subjects.filter((s) => wanted.includes(s.id)) : bundle.subjects;
+   513→   513→  return subjects.map((s) => ({
+   514→   514→    _id: stableId('res', bundle.batch.batch_id, s.name),
+   515→   515→    name: `${s.name} — All Resources`,
+   516→   516→    typeId: s.id,
+   517→   517→    notes: s.notes.length + s.dpps.length,
+   518→   518→    videos: s.lectures.length,
+   519→   519→    order: 0,
+   520→   520→  }));
+   521→   521→}
+   522→   522→
+   523→   523→// --------------------------- content nodes ----------------------------------
+   524→   524→
+   525→   525→export interface ContentNode {
+   526→   526→  _id: string;
+   527→   527→  type: 'LECTURE' | 'NOTES' | 'DPP_PDF' | 'DPP_VIDEOS';
+   528→   528→  data: Record<string, unknown>;
+   529→   529→}
+   530→   530→
+   531→   531→function attachment(docId: string): { baseUrl: string; key: string } {
+   532→   532→  // Client imageUrl() joins baseUrl+key → /api/notes/<fileId> (our PDF route).
+   533→   533→  return { baseUrl: '/api/notes/', key: docId };
+   534→   534→}
+   535→   535→
+   536→   536→function lectureNode(l: LectureRef): ContentNode {
+   537→   537→  return {
+   538→   538→    _id: l.nodeId,
+   539→   539→    type: 'LECTURE',
+   540→   540→    data: {
+   541→   541→      _id: l.videoId,
+   542→   542→      topic: l.topic,
+   543→   543→      date: l.date,
+   544→   544→      videoDetails: {
+   545→   545→        _id: l.videoId,
+   546→   546→        image: posterFor(l.videoId),
+   547→   547→        duration: l.duration,
+   548→   548→        videoUrl: lectureVideoUrl(l.videoId),
+   549→   549→      },
+   550→   550→      homeworkIds: [
+   551→   551→        {
+   552→   552→          _id: stableId('hw', l.nodeId),
+   553→   553→          topic: `${l.chapterName} — Class Notes`,
+   554→   554→          attachmentIds: [attachment(l.notesDocId)],
+   555→   555→        },
+   556→   556→      ],
+   557→   557→      exerciseIds: l.dppRefs.map((d) => ({
+   558→   558→        _id: d.id,
+   559→   559→        dppId: d.id,
+   560→   560→        title: d.title,
+   561→   561→        attachmentIds: [attachment(d.docId)],
+   562→   562→      })),
+   563→   563→    },
+   564→   564→  };
+   565→   565→}
+   566→   566→
+   567→   567→function notesNode(n: NotesRef): ContentNode {
+   568→   568→  return {
+   569→   569→    _id: n.nodeId,
+   570→   570→    type: 'NOTES',
+   571→   571→    data: {
+   572→   572→      _id: n.nodeId,
+   573→   573→      topic: n.topic,
+   574→   574→      date: n.date,
+   575→   575→      homeworkIds: [
+   576→   576→        {
+   577→   577→          _id: stableId('hw', n.nodeId),
+   578→   578→          topic: n.topic,
+   579→   579→          attachmentIds: [attachment(n.docId)],
+   580→   580→        },
+   581→   581→      ],
+   582→   582→    },
+   583→   583→  };
+   584→   584→}
+   585→   585→
+   586→   586→function dppNode(d: DppRef): ContentNode {
+   587→   587→  return {
+   588→   588→    _id: d.testId,
+   589→   589→    type: 'DPP_PDF',
+   590→   590→    data: {
+   591→   591→      _id: d.testId,
+   592→   592→      topic: d.name,
+   593→   593→      homeworkIds: [
+   594→   594→        {
+   595→   595→          _id: stableId('hw', d.testId),
+   596→   596→          topic: d.name,
+   597→   597→          attachmentIds: [attachment(d.docId)],
+   598→   598→        },
+   599→   599→      ],
+   600→   600→    },
+   601→   601→  };
+   602→   602→}
+   603→   603→
+   604→   604→function dppVideoNode(d: DppRef): ContentNode {
+   605→   605→  const videoId = stableId('dppvid', d.testId);
+   606→   606→  return {
+   607→   607→    _id: stableId('dppvidnode', d.testId),
+   608→   608→    type: 'DPP_VIDEOS',
+   609→   609→    data: {
+   610→   610→      _id: videoId,
+   611→   611→      topic: `DPP Solution : ${d.chapterName}`,
+   612→   612→      date: new Date().toISOString(),
+   613→   613→      videoDetails: {
+   614→   614→        _id: videoId,
+   615→   615→        image: posterFor(videoId),
+   616→   616→        duration: fmtDuration(makeRng('dppdur', d.testId)),
+   617→   617→        videoUrl: lectureVideoUrl(videoId),
+   618→   618→      },
+   619→   619→    },
+   620→   620→  };
+   621→   621→}
+   622→   622→
+   623→   623→export function getContentNodes(
+   624→   624→  batchId: string,
+   625→   625→  subjectId: string,
+   626→   626→  tagId: string,
+   627→   627→  contentType = 'ALL',
+   628→   628→  skip = 0,
+   629→   629→  limit = 50,
+   630→   630→): ContentNode[] {
+   631→   631→  const bundle = getBatchContent(batchId);
+   632→   632→  if (!bundle) return [];
+   633→   633→
+   634→   634→  let nodes: ContentNode[] = [];
+   635→   635→
+   636→   636→  if (tagId.startsWith('res_')) {
+   637→   637→    // Resource folder — everything for the subject.
+   638→   638→    const subject = bundle.subjects.find((s) => s.id === subjectId) ?? bundle.subjects[0];
+   639→   639→    if (!subject) return [];
+   640→   640→    nodes = [
+   641→   641→      ...subject.notes.map(notesNode),
+   642→   642→      ...subject.dpps.map(dppNode),
+   643→   643→      ...subject.lectures.map(lectureNode),
+   644→   644→    ];
+   645→   645→  } else {
+   646→   646→    // Chapter / study-material topic.
+   647→   647→    for (const subject of bundle.subjects) {
+   648→   648→      const chapter = subject.chapters.find((c) => c.id === tagId);
+   649→   649→      if (chapter) {
+   650→   650→        const lectures = subject.lectures.filter((l) => l.chapterId === chapter.id);
+   651→   651→        const notes = subject.notes.filter((n) => n.chapterId === chapter.id);
+   652→   652→        const dpps = subject.dpps.filter((d) => d.chapterId === chapter.id);
+   653→   653→        const type = (contentType || 'ALL').toUpperCase();
+   654→   654→        if (type === 'LECTURE') nodes = lectures.map(lectureNode);
+   655→   655→        else if (type === 'NOTES') nodes = notes.map(notesNode);
+   656→   656→        else if (type === 'DPP_PDF') nodes = dpps.map(dppNode);
+   657→   657→        else if (type === 'DPP_VIDEOS') nodes = dpps.map(dppVideoNode);
+   658→   658→        else nodes = [...lectures.map(lectureNode), ...notes.map(notesNode), ...dpps.map(dppNode)];
+   659→   659→        break;
+   660→   660→      }
+   661→   661→      const sm = subject.notes.find((n) => n.nodeId === tagId);
+   662→   662→      if (sm) {
+   663→   663→        nodes = [notesNode(sm)];
+   664→   664→        break;
+   665→   665→      }
+   666→   666→    }
+   667→   667→  }
+   668→   668→
+   669→   669→  return nodes.slice(Math.max(0, skip), Math.max(0, skip) + Math.max(1, limit));
+   670→   670→}
+   671→   671→
+   672→   672→// --------------------------- tests & dpp ------------------------------------
+   673→   673→
+   674→   674→export interface TestItem {
+   675→   675→  _id: string;
+   676→   676→  name: string;
+   677→   677→  totalQuestions: number;
+   678→   678→  totalMarks: number;
+   679→   679→  duration: number;
+   680→   680→  testActivityStatus: string;
+   681→   681→  testStudentMapping: { _id: string; testActivityStatus: string } | null;
+   682→   682→  dppQuizDetails?: {
+   683→   683→    contentId: string;
+   684→   684→    scheduleId: string;
+   685→   685→    test: { _id: string; name: string; totalQuestions: number; totalMarks: number };
+   686→   686→    testStudentMapping: Record<string, unknown>;
+   687→   687→  };
+   688→   688→}
+   689→   689→
+   690→   690→function toTestItem(d: DppRef): TestItem {
+   691→   691→  return {
+   692→   692→    _id: d.testId,
+   693→   693→    name: d.name,
+   694→   694→    totalQuestions: d.totalQuestions,
+   695→   695→    totalMarks: d.totalMarks,
+   696→   696→    duration: Math.max(15, Math.round((d.totalQuestions * 1.2) / 5) * 5),
+   697→   697→    testActivityStatus: 'Not Started',
+   698→   698→    testStudentMapping: null,
+   699→   699→    dppQuizDetails: {
+   700→   700→      contentId: d.testId,
+   701→   701→      scheduleId: d.chapterId,
+   702→   702→      test: {
+   703→   703→        _id: d.testId,
+   704→   704→        name: d.name,
+   705→   705→        totalQuestions: d.totalQuestions,
+   706→   706→        totalMarks: d.totalMarks,
+   707→   707→      },
+   708→   708→      testStudentMapping: { testActivityStatus: 'Not Started' },
+   709→   709→    },
+   710→   710→  };
+   711→   711→}
+   712→   712→
+   713→   713→export function getDppList(batchId: string, subjectId: string, chapterId: string, page = 1, limit = 50): TestItem[] {
+   714→   714→  const bundle = getBatchContent(batchId);
+   715→   715→  if (!bundle) return [];
+   716→   716→  const subject = bundle.subjects.find((s) => s.id === subjectId);
+   717→   717→  const dpps = subject
+   718→   718→    ? subject.dpps.filter((d) => !chapterId || d.chapterId === chapterId)
+   719→   719→    : bundle.subjects.flatMap((s) => s.dpps).filter((d) => !chapterId || d.chapterId === chapterId);
+   720→   720→  const start = (Math.max(1, page) - 1) * limit;
+   721→   721→  return dpps.slice(start, start + limit).map(toTestItem);
+   722→   722→}
+   723→   723→
+   724→   724→export function getTests(batchId: string, limit = 50): TestItem[] {
+   725→   725→  const bundle = getBatchContent(batchId);
+   726→   726→  if (!bundle) return [];
+   727→   727→  const dppItems = bundle.subjects.flatMap((s) => s.dpps).map(toTestItem);
+   728→   728→  const bigItems: TestItem[] = bundle.bigTests.map((t) => ({
+   729→   729→    _id: t.testId,
+   730→   730→    name: t.name,
+   731→   731→    totalQuestions: t.totalQuestions,
+   732→   732→    totalMarks: t.totalMarks,
+   733→   733→    duration: t.duration,
+   734→   734→    testActivityStatus: 'Not Started',
+   735→   735→    testStudentMapping: null,
+   736→   736→  }));
+   737→   737→  const items = [...bigItems, ...dppItems];
+   738→   738→  return items.slice(0, Math.max(1, limit));
+   739→   739→}
+   740→   740→
+   741→   741→// --------------------------- schedule ----------------------------------------
+   742→   742→
+   743→   743→export function getTodaySchedule(batchId: string): ContentNode[] {
+   744→   744→  const bundle = getBatchContent(batchId);
+   745→   745→  if (!bundle || bundle.subjects.length === 0) return [];
+   746→   746→
+   747→   747→  const rng = makeRng('today', bundle.batch.batch_id, new Date().toISOString().slice(0, 10));
+   748→   748→  const now = Date.now();
+   749→   749→
+   750→   750→  const allLectures = bundle.subjects.flatMap((s) => s.lectures);
+   751→   751→  if (allLectures.length === 0) return [];
+   752→   752→
+   753→   753→  const nodes: ContentNode[] = [];
+   754→   754→
+   755→   755→  const liveLecture = rng.pick(allLectures);
+   756→   756→  nodes.push(
+   757→   757→    eventNode(
+   758→   758→      liveLecture,
+   759→   759→      new Date(now - 35 * 60000).toISOString(),
+   760→   760→      new Date(now + 25 * 60000).toISOString(),
+   761→   761→      'LIVE',
+   762→   762→    ),
+   763→   763→  );
+   764→   764→
+   765→   765→  const upcomingCount = rng.int(1, 2);
+   766→   766→  for (let i = 0; i < upcomingCount; i++) {
+   767→   767→    const lec = rng.pick(allLectures);
+   768→   768→    const start = new Date(now + (90 + i * 150) * 60000);
+   769→   769→    nodes.push(eventNode(lec, start.toISOString(), new Date(start.getTime() + 3600000).toISOString(), 'UPCOMING'));
+   770→   770→  }
+   771→   771→
+   772→   772→  const tomorrow = new Date(now + 86400000);
+   773→   773→  tomorrow.setHours(9, 30, 0, 0);
+   774→   774→  nodes.push(
+   775→   775→    eventNode(
+   776→   776→      rng.pick(allLectures),
+   777→   777→      tomorrow.toISOString(),
+   778→   778→      new Date(tomorrow.getTime() + 3600000).toISOString(),
+   779→   779→      'UPCOMING',
+   780→   780→    ),
+   781→   781→  );
+   782→   782→
+   783→   783→  return nodes;
+   784→   784→}
+   785→   785→
+   786→   786→function eventNode(l: LectureRef, startTime: string, endTime: string, status: string): ContentNode {
+   787→   787→  return {
+   788→   788→    _id: stableId('evt', l.nodeId, startTime),
+   789→   789→    type: 'LECTURE',
+   790→   790→    data: {
+   791→   791→      _id: stableId('evtvid', l.nodeId, startTime),
+   792→   792→      topic: `${l.chapterName} : ${l.subtopic}`,
+   793→   793→      startTime,
+   794→   794→      endTime,
+   795→   795→      status,
+   796→   796→      videoDetails: { _id: l.videoId, image: posterFor(l.videoId) },
+   797→   797→      teachers: [l.subjectTeacher],
+   798→   798→      subjectId: { _id: l.subjectId },
+   799→   799→      homeworkIds: [
+   800→   800→        {
+   801→   801→          _id: stableId('hw', l.nodeId),
+   802→   802→          topic: `${l.chapterName} — Class Notes`,
+   803→   803→          attachmentIds: [attachment(l.notesDocId)],
+   804→   804→        },
+   805→   805→      ],
+   806→   806→      exerciseIds: l.dppRefs.map((d) => ({
+   807→   807→        _id: d.id,
+   808→   808→        dppId: d.id,
+   809→   809→        title: d.title,
+   810→   810→        attachmentIds: [attachment(d.docId)],
+   811→   811→      })),
+   812→   812→    },
+   813→   813→  };
+   814→   814→}
+   815→   815→
+   816→   816→export function getScheduleDetail(batchId: string, scheduleId: string): Record<string, unknown> | null {
+   817→   817→  const bundle = getBatchContent(batchId);
+   818→   818→  if (!bundle) return null;
+   819→   819→
+   820→   820→  // Today-schedule events resolve within the same day.
+   821→   821→  const events = getTodaySchedule(batchId);
+   822→   822→  const evt = events.find((e) => e._id === scheduleId);
+   823→   823→  if (evt) return evt.data;
+   824→   824→
+   825→   825→  for (const subject of bundle.subjects) {
+   826→   826→    const lecture = subject.lectures.find((l) => l.nodeId === scheduleId);
+   827→   827→    if (lecture) return lectureNode(lecture).data;
+   828→   828→
+   829→   829→    const note = subject.notes.find((n) => n.nodeId === scheduleId);
+   830→   830→    if (note) return notesNode(note).data;
+   831→   831→
+   832→   832→    const dpp = subject.dpps.find((d) => d.testId === scheduleId);
+   833→   833→    if (dpp) return dppNode(dpp).data;
+   834→   834→  }
+   835→   835→  return null;
+   836→   836→}
+   837→   837→
+   838→   838→// --------------------------- notifications ----------------------------------
+   839→   839→
+   840→   840→export interface NotificationItem {
+   841→   841→  _id: string;
+   842→   842→  type: string;
+   843→   843→  heading: string;
+   844→   844→  announcement: string;
+   845→   845→  scheduleTime: string;
+   846→   846→  isRead: boolean;
+   847→   847→}
+   848→   848→
+   849→   849→export function getNotifications(batchId: string, page = 1, limit = 20): { data: NotificationItem[]; hasMore: boolean } {
+   850→   850→  const bundle = getBatchContent(batchId);
+   851→   851→  if (!bundle) return { data: [], hasMore: false };
+   852→   852→
+   853→   853→  const rng = makeRng('notifs', bundle.batch.batch_id);
+   854→   854→  const allLectures = bundle.subjects.flatMap((s) => s.lectures);
+   855→   855→  const allDpps = bundle.subjects.flatMap((s) => s.dpps);
+   856→   856→  const allTests = bundle.bigTests;
+   857→   857→  const now = Date.now();
+   858→   858→
+   859→   859→  const total = rng.int(22, 30);
+   860→   860→  const items: NotificationItem[] = [];
+   861→   861→  for (let i = 0; i < total; i++) {
+   862→   862→    const tpl = rng.pick(NOTIF_TEMPLATES);
+   863→   863→    let topic = '';
+   864→   864→    if (tpl.type === 'LECTURE' && allLectures.length > 0) topic = rng.pick(allLectures).chapterName;
+   865→   865→    else if (tpl.type === 'DPP' && allDpps.length > 0) topic = rng.pick(allDpps).name;
+   866→   866→    else if (tpl.type === 'TEST' && allTests.length > 0) topic = rng.pick(allTests).name;
+   867→   867→    else topic = bundle.batch.name;
+   868→   868→
+   869→   869→    const ageHours = i * rng.int(9, 26) + rng.int(1, 8);
+   870→   870→    items.push({
+   871→   871→      _id: stableId('ntf', bundle.batch.batch_id, i),
+   872→   872→      type: tpl.type,
+   873→   873→      heading: tpl.heading(topic),
+   874→   874→      announcement: tpl.announcement(topic),
+   875→   875→      scheduleTime: new Date(now - ageHours * 3600000).toISOString(),
+   876→   876→      isRead: i > 5,
+   877→   877→    });
+   878→   878→  }
+   879→   879→
+   880→   880→  const start = (Math.max(1, page) - 1) * limit;
+   881→   881→  const slice = items.slice(start, start + limit);
+   882→   882→  return { data: slice, hasMore: start + limit < items.length };
+   883→   883→}
+   884→   884→
+   885→   885→// --------------------------- teachers ----------------------------------------
+   886→   886→
+   887→   887→export function getTeacherDetail(batchId: string, teacherId: string): Record<string, unknown> | null {
+   888→   888→  const bundle = getBatchContent(batchId);
+   889→   889→  if (!bundle || bundle.subjects.length === 0) return null;
+   890→   890→
+   891→   891→  let subject = bundle.subjects[0];
+   892→   892→  if (teacherId) {
+   893→   893→    const found = bundle.subjects.find((s) => s.teacher.name === teacherId);
+   894→   894→    if (found) subject = found;
+   895→   895→  }
+   896→   896→
+   897→   897→  return {
+   898→   898→    _id: stableId('tch', bundle.batch.batch_id, subject.name),
+   899→   899→    name: subject.teacher.name,
+   900→   900→    subject: subject.name,
+   901→   901→    qualification: subject.teacher.qualification,
+   902→   902→    experience: `${subject.teacher.experience}+ years`,
+   903→   903→    description: `${subject.teacher.name} teaches ${subject.name} in this batch. ${subject.teacher.qualification}, with ${subject.teacher.experience}+ years of teaching experience.`,
+   904→   904→    imageUrl: '',
+   905→   905→  };
+   906→   906→}
+   907→   907→
+   908→   908→// --------------------------- video payload -----------------------------------
+   909→   909→
+   910→   910→export function getVideoPayload(childId: string): Record<string, unknown> | null {
+   911→   911→  const id = (childId || '').trim();
+   912→   912→  if (!id) return null;
+   913→   913→  const url = lectureVideoUrl(id);
+   914→   914→  return {
+   915→   915→    url,
+   916→   916→    signedUrl: url,
+   917→   917→    poster: posterFor(id),
+   918→   918→    drmDetails: null,
+   919→   919→  };
+   920→   920→}
+   921→   921→
+   922→   922→// --------------------------- quiz ---------------------------------------------
+   923→   923→
+   924→   924→export interface QuizData {
+   925→   925→  _id: string;
+   926→   926→  name: string;
+   927→   927→  duration: number; // minutes
+   928→   928→  questions: Array<{ _id: string; question: string; options: string[]; answer: number; marks: number }>;
+   929→   929→}
+   930→   930→
+   931→   931→export function getQuiz(batchId: string, testId: string): QuizData | null {
+   932→   932→  const bundle = getBatchContent(batchId);
+   933→   933→  if (!bundle) return null;
+   934→   934→
+   935→   935→  const dpp = bundle.subjects.flatMap((s) => s.dpps).find((d) => d.testId === testId);
+   936→   936→
+   937→   937→  let name = 'Practice Quiz';
+   938→   938→  let subjectName = bundle.subjects[0]?.name ?? 'General';
+   939→   939→  let questionCount = 8;
+   940→   940→
+   941→   941→  if (dpp) {
+   942→   942→    name = dpp.name;
+   943→   943→    subjectName = dpp.subjectName;
+   944→   944→    questionCount = dpp.totalQuestions;
+   945→   945→  } else {
+   946→   946→    const big = bundle.bigTests.find((t) => t.testId === testId);
+   947→   947→    if (big) {
+   948→   948→      name = big.name;
+   949→   949→      subjectName = big.subjectName;
+   950→   950→      questionCount = big.totalQuestions;
+   951→   951→    }
+   952→   952→  }
+   953→   953→
+   954→   954→  // Build the question pool from the subject bank + general banks.
+   955→   955→  const pool = [
+   956→   956→    ...quizBankForSubject(subjectName),
+   957→   957→    ...quizBankForSubject('Quantitative Aptitude'),
+   958→   958→    ...quizBankForSubject('General Awareness'),
+   959→   959→    ...quizBankForSubject('English Language'),
+   960→   960→  ];
+   961→   961→  const rng = makeRng('quiz', batchId, testId);
+   962→   962→  const shuffled = rng.shuffle(pool).slice(0, Math.max(1, Math.min(questionCount, pool.length)));
+   963→   963→  const questions = shuffled.map((qq, i) => {
+   964→   964→    const optionRng = makeRng('opts', batchId, testId, i);
+   965→   965→    const indices = optionRng.shuffle(qq.options.map((_, idx) => idx));
+   966→   966→    const options = indices.map((idx) => qq.options[idx]);
+   967→   967→    return {
+   968→   968→      _id: stableId('q', testId, i),
+   969→   969→      question: qq.q,
+   970→   970→      options,
+   971→   971→      answer: indices.indexOf(qq.answer),
+   972→   972→      marks: 4,
+   973→   973→    };
+   974→   974→  });
+   975→   975→
+   976→   976→  const duration = Math.max(10, Math.round((questions.length * 1.5) / 5) * 5);
+   977→   977→  return { _id: testId, name, duration, questions };
+   978→   978→}
+   979→   979→

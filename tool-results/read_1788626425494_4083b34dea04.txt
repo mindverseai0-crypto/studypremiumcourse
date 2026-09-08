@@ -1,0 +1,558 @@
+     1→   601→            <i className="fas fa-times"></i>
+     2→   602→          </button>
+     3→   603→        </div>
+     4→   604→        <div className="sidebar-links">
+     5→   605→          <a onClick={() => nav('study-view')} className={view === 'study-view' ? 'active' : ''} id="link-study" role="button" tabIndex={0}>
+     6→   606→            <i className="fas fa-book-open"></i> Study Dashboard
+     7→   607→          </a>
+     8→   608→          <a onClick={() => nav('home-view')} className={view === 'home-view' ? 'active' : ''} id="link-courses" role="button" tabIndex={0}>
+     9→   609→            <i className="fas fa-compass"></i> All Courses
+    10→   610→          </a>
+    11→   611→        </div>
+    12→   612→        <div id="utk-credit" style={{ marginTop: 'auto', padding: 24, textAlign: 'center', borderTop: '1px solid var(--sb-border-color)', background: 'rgba(0,0,0,0.02)' }}>
+    13→   613→          <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--sb-text-muted)', letterSpacing: '0.5px' }}>
+    14→   614→            <i className="fas fa-code" style={{ color: 'var(--sb-text-dark)' }}></i> Developed by <br />
+    15→   615→            <span style={{ color: 'var(--sb-primary)', fontWeight: 800, fontSize: '1.2rem', textTransform: 'uppercase', display: 'inline-block', marginTop: 5 }}>Utkarsh</span>
+    16→   616→          </div>
+    17→   617→        </div>
+    18→   618→      </div>
+    19→   619→
+    20→   620→      {/* ================= HEADER ================= */}
+    21→   621→      <header className="sb-header">
+    22→   622→        <div className="d-flex align-items-center">
+    23→   623→          <button className="menu-btn" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
+    24→   624→            <i className="fas fa-bars-staggered"></i>
+    25→   625→          </button>
+    26→   626→          <a className="logo-area" onClick={() => nav('home-view')} role="button" tabIndex={0}>
+    27→   627→            <span className="logo-text">study<span>bee</span>pro</span>
+    28→   628→          </a>
+    29→   629→        </div>
+    30→   630→        <div className="d-flex align-items-center">
+    31→   631→          <div className="nav-tab active xp-chip">
+    32→   632→            <i className="fas fa-bolt text-warning"></i> <span>{xp} XP</span>
+    33→   633→          </div>
+    34→   634→        </div>
+    35→   635→      </header>
+    36→   636→
+    37→   637→      <div id="app-container">
+    38→   638→        {/* ================= HOME VIEW ================= */}
+    39→   639→        <div id="home-view" className={`view-section ${view === 'home-view' ? 'active-view' : ''}`}>
+    40→   640→          <div className="search-container">
+    41→   641→            <div className="d-flex justify-content-between align-items-center mb-3">
+    42→   642→              <h4 className="m-0" style={{ fontWeight: 800 }}>Discover Courses</h4>
+    43→   643→              <span style={{ fontSize: '0.85rem', color: 'var(--sb-primary)', fontWeight: 700 }}>
+    44→   644→                {searching ? <i className="fas fa-spinner fa-spin"></i> : null}
+    45→   645→              </span>
+    46→   646→            </div>
+    47→   647→            <input
+    48→   648→              type="text"
+    49→   649→              className="search-bar"
+    50→   650→              placeholder="Search for exams, batches..."
+    51→   651→              value={searchTerm}
+    52→   652→              onChange={(e) => handleSearchInput(e.target.value)}
+    53→   653→              aria-label="Search for exams, batches"
+    54→   654→            />
+    55→   655→          </div>
+    56→   656→          <div className="container px-4 pb-5">
+    57→   657→            {catalogError ? (
+    58→   658→              <div className="text-center p-5 text-muted">{catalogError}</div>
+    59→   659→            ) : null}
+    60→   660→            {!searching && batches.length === 0 && !catalogError ? (
+    61→   661→              <div className="text-center p-5 text-muted">
+    62→   662→                <i className="fas fa-search fa-2x mb-3" style={{ display: 'block' }}></i>
+    63→   663→                No batches found.
+    64→   664→              </div>
+    65→   665→            ) : null}
+    66→   666→            <div className="row g-4">
+    67→   667→              {batches.map((b) => {
+    68→   668→                const thumb = b.imageUrl || b.previewImage || DEFAULT_THUMB;
+    69→   669→                const isEnrolled = enrolled.includes(b._id);
+    70→   670→                return (
+    71→   671→                  <div className="col-12 col-md-6 col-lg-4" key={b._id}>
+    72→   672→                    <div className="card-custom" onClick={() => handleEnroll(b)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') handleEnroll(b); }}>
+    73→   673→                      <img src={thumb} className="batch-thumb" alt={b.name} loading="lazy" />
+    74→   674→                      <div className="card-body-custom">
+    75→   675→                        <div className="title-text mt-2">{b.name}</div>
+    76→   676→                        <button className="btn-sb-dark w-100 mt-auto" style={{ fontWeight: 600 }}>
+    77→   677→                          {isEnrolled ? 'Study' : 'View Details'}
+    78→   678→                        </button>
+    79→   679→                      </div>
+    80→   680→                    </div>
+    81→   681→                  </div>
+    82→   682→                );
+    83→   683→              })}
+    84→   684→            </div>
+    85→   685→            {hasMore ? (
+    86→   686→              <div className="text-center mt-5" id="load-more-container" style={{ display: 'block' }}>
+    87→   687→                <button className="btn btn-sb-dark" style={{ width: 'auto', padding: '14px 40px', borderRadius: 30 }} onClick={loadNextPage}>
+    88→   688→                  <i className="fas fa-sync-alt me-2"></i> {searching ? 'Loading...' : 'Load More'}
+    89→   689→                </button>
+    90→   690→              </div>
+    91→   691→            ) : null}
+    92→   692→          </div>
+    93→   693→        </div>
+    94→   694→
+    95→   695→        {/* ================= STUDY VIEW ================= */}
+    96→   696→        <div id="study-view" className={`view-section ${view === 'study-view' ? 'active-view' : ''}`}>
+    97→   697→          <div className="study-header-bg">
+    98→   698→            <div style={{ flexGrow: 1, overflow: 'hidden', paddingRight: 15 }}>
+    99→   699→              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#9CA3AF', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '1px' }}>Selected Batch</div>
+   100→   700→              <select
+   101→   701→                className="batch-dropdown"
+   102→   702→                value={currentBatchId || ''}
+   103→   703→                onChange={(e) => setCurrentBatchId(e.target.value)}
+   104→   704→                aria-label="Select enrolled batch"
+   105→   705→              >
+   106→   706→                {enrolledDetails.length === 0 ? <option value="">No batch enrolled</option> : null}
+   107→   707→                {enrolledDetails.map((b) => (
+   108→   708→                  <option key={b._id} value={b._id}>{b.name}</option>
+   109→   709→                ))}
+   110→   710→              </select>
+   111→   711→            </div>
+   112→   712→            <button className="back-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', margin: 0 }} onClick={openBatchInfo} aria-label="Batch info">
+   113→   713→              <i className="fas fa-info"></i>
+   114→   714→            </button>
+   115→   715→          </div>
+   116→   716→
+   117→   717→          <div className="offerings-container pb-0">
+   118→   718→            <div className="offering-title">Quick Access</div>
+   119→   719→
+   120→   720→            <div className="offering-item" onClick={openAllClasses} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openAllClasses(); }}>
+   121→   721→              <div className="offering-icon icon-blue"><i className="fas fa-tv"></i></div>
+   122→   722→              <div style={{ flexGrow: 1 }}>
+   123→   723→                <span style={{ fontWeight: 800, fontSize: '1.15rem', color: 'var(--sb-text-dark)', display: 'block' }}>All Classes</span>
+   124→   724→                <span style={{ fontSize: '0.85rem', color: 'var(--sb-text-muted)', fontWeight: 500 }}>Lectures &amp; Resources</span>
+   125→   725→              </div>
+   126→   726→              <i className="fas fa-chevron-right text-muted ms-auto"></i>
+   127→   727→            </div>
+   128→   728→
+   129→   729→            <div className="offering-item" onClick={openAllTests} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openAllTests(); }}>
+   130→   730→              <div className="offering-icon icon-indigo"><i className="fas fa-file-signature"></i></div>
+   131→   731→              <div style={{ flexGrow: 1 }}>
+   132→   732→                <span style={{ fontWeight: 800, fontSize: '1.15rem', color: 'var(--sb-text-dark)', display: 'block' }}>All Tests &amp; DPPs</span>
+   133→   733→                <span style={{ fontSize: '0.85rem', color: 'var(--sb-text-muted)', fontWeight: 500 }}>Practice &amp; Mocks</span>
+   134→   734→              </div>
+   135→   735→              <i className="fas fa-chevron-right text-muted ms-auto"></i>
+   136→   736→            </div>
+   137→   737→          </div>
+   138→   738→
+   139→   739→          <div className="live-section mt-4">
+   140→   740→            <div className="offering-title"><i className="fas fa-broadcast-tower text-danger me-2"></i> Active Events</div>
+   141→   741→            <div id="live-classes-scroll">
+   142→   742→              {eventsLoading ? (
+   143→   743→                <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   144→   744→              ) : !currentBatchId ? (
+   145→   745→                <div className="text-center py-4">
+   146→   746→                  <i className="fas fa-calendar-times" style={{ fontSize: '3rem', color: 'var(--sb-text-muted)', opacity: 0.5, marginBottom: 10 }}></i>
+   147→   747→                  <h6 style={{ fontWeight: 700 }}>No batch selected</h6>
+   148→   748→                  <p className="text-muted" style={{ fontSize: '0.85rem' }}>Enroll in a batch from All Courses to see your schedule.</p>
+   149→   749→                </div>
+   150→   750→              ) : liveEvents.length === 0 ? (
+   151→   751→                <div className="text-center py-4">
+   152→   752→                  <i className="fas fa-calendar-times" style={{ fontSize: '3rem', color: 'var(--sb-text-muted)', opacity: 0.5, marginBottom: 10 }}></i>
+   153→   753→                  <h6 style={{ fontWeight: 700 }}>No upcoming events,</h6>
+   154→   754→                  <p className="text-muted" style={{ fontSize: '0.85rem' }}>Perfect time to catch up on pending work!</p>
+   155→   755→                </div>
+   156→   756→              ) : (
+   157→   757→                liveEvents.map((e) => {
+   158→   758→                  const d = e.data;
+   159→   759→                  const start = new Date(d.startTime);
+   160→   760→                  const end = new Date(d.endTime);
+   161→   761→                  const isLiveNow = d.status === 'LIVE' || (start <= now && end >= now);
+   162→   762→                  const thumb = d.videoDetails?.image || DEFAULT_THUMB;
+   163→   763→                  const time = d.startTime ? start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+   164→   764→                  const liveUrl = `/live?videoId=${d._id}&batchId=${currentBatchId}&subjectId=${d.subjectId?._id || ''}&title=${encodeURIComponent(d.topic || '')}`;
+   165→   765→                  const hasAttach = (d.homeworkIds && d.homeworkIds.length > 0) || (d.exerciseIds && d.exerciseIds.length > 0);
+   166→   766→                  return (
+   167→   767→                    <div className="live-card-vertical" key={e._id}>
+   168→   768→                      <img src={thumb} className="live-thumb-sm" alt={d.topic} />
+   169→   769→                      <div className="flex-grow-1">
+   170→   770→                        {isLiveNow
+   171→   771→                          ? <span className="live-tag">🔴LIVE NOW</span>
+   172→   772→                          : <span className="upcoming-tag">🔔UPCOMING</span>}
+   173→   773→                        <div style={{ fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2, marginBottom: 5, marginTop: 6, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{d.topic || d._id}</div>
+   174→   774→                        <div className="d-flex justify-content-between align-items-center mt-2">
+   175→   775→                          <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--sb-text-muted)' }}>
+   176→   776→                            <i className="far fa-clock"></i> {time}
+   177→   777→                          </div>
+   178→   778→                          <div className="d-flex align-items-center gap-2">
+   179→   779→                            {isLiveNow ? (
+   180→   780→                              <button className="btn btn-sm btn-danger" onClick={() => window.open(liveUrl, '_blank')}>
+   181→   781→                                <i className="fas fa-play"></i> Join
+   182→   782→                              </button>
+   183→   783→                            ) : start > now ? (
+   184→   784→                              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--sb-text-muted)', border: '1px solid var(--sb-border-color)', padding: '4px 8px', borderRadius: 4 }}>Scheduled</span>
+   185→   785→                            ) : null}
+   186→   786→                            {hasAttach ? (
+   187→   787→                              <button className="btn btn-sm btn-outline-secondary" onClick={() => openNotesModal(e._id)}>Notes</button>
+   188→   788→                            ) : null}
+   189→   789→                          </div>
+   190→   790→                        </div>
+   191→   791→                      </div>
+   192→   792→                    </div>
+   193→   793→                  );
+   194→   794→                })
+   195→   795→              )}
+   196→   796→            </div>
+   197→   797→          </div>
+   198→   798→        </div>
+   199→   799→
+   200→   800→        {/* ================= ALL CLASSES VIEW ================= */}
+   201→   801→        <div id="all-classes-view" className={`view-section ${view === 'all-classes-view' ? 'active-view' : ''}`}>
+   202→   802→          <div className="breadcrumb-pw">
+   203→   803→            <button className="back-btn" onClick={() => nav('study-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+   204→   804→            <span>Subjects</span>
+   205→   805→          </div>
+   206→   806→          <div className="nav-tabs-pw">
+   207→   807→            <div className={`nav-tab ${resourcesTab === 'subjects' ? 'active' : ''}`} id="tab-subjects" onClick={() => switchClassesTab('subjects')}>Subjects</div>
+   208→   808→            <div className={`nav-tab ${resourcesTab === 'resources' ? 'active' : ''}`} id="tab-resources" onClick={() => switchClassesTab('resources')}>Resources</div>
+   209→   809→          </div>
+   210→   810→          <div className="px-4 py-3">
+   211→   811→            {resourcesTab === 'subjects' ? (
+   212→   812→              subjectsLoading ? (
+   213→   813→                <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   214→   814→              ) : subjects.length === 0 ? (
+   215→   815→                <p className="text-muted text-center w-100">No subjects mapped.</p>
+   216→   816→              ) : (
+   217→   817→                <div className="row g-3" id="subjects-grid">
+   218→   818→                  {subjects.map((sub) => (
+   219→   819→                    <div className="col-12 col-md-6" key={sub._id}>
+   220→   820→                      <div className="list-card" onClick={() => openSubject(sub)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openSubject(sub); }}>
+   221→   821→                        <div className="sub-icon-letter">{sub.subject.substring(0, 2).toUpperCase()}</div>
+   222→   822→                        <div style={{ flexGrow: 1, fontWeight: 700, fontSize: '1.05rem' }}>{sub.subject}</div>
+   223→   823→                        <i className="fas fa-chevron-right text-muted"></i>
+   224→   824→                      </div>
+   225→   825→                    </div>
+   226→   826→                  ))}
+   227→   827→                </div>
+   228→   828→              )
+   229→   829→            ) : resourcesLoading ? (
+   230→   830→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   231→   831→            ) : resourceTopics.length === 0 ? (
+   232→   832→              <p className="text-muted text-center p-4">No resources found.</p>
+   233→   833→            ) : (
+   234→   834→              <div id="resources-grid">
+   235→   835→                {resourceTopics.map((t) => (
+   236→   836→                  <div className="list-card" key={t._id} onClick={() => openResourceTopic(t)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openResourceTopic(t); }}>
+   237→   837→                    <div className="sub-icon-letter" style={{ background: '#fefce8', color: '#d97706' }}><i className="fas fa-folder"></i></div>
+   238→   838→                    <div style={{ flexGrow: 1 }}>
+   239→   839→                      <div style={{ fontWeight: 700, fontSize: '1rem' }}>{t.name}</div>
+   240→   840→                      <div style={{ fontSize: '0.8rem', color: 'var(--sb-text-muted)', marginTop: 2 }}>{t.notes} Notes &bull; {t.videos} Videos</div>
+   241→   841→                    </div>
+   242→   842→                    <i className="fas fa-chevron-right text-muted"></i>
+   243→   843→                  </div>
+   244→   844→                ))}
+   245→   845→              </div>
+   246→   846→            )}
+   247→   847→          </div>
+   248→   848→        </div>
+   249→   849→
+   250→   850→        {/* ================= CHAPTERS VIEW ================= */}
+   251→   851→        <div id="chapters-view" className={`view-section ${view === 'chapters-view' ? 'active-view' : ''}`}>
+   252→   852→          <div className="breadcrumb-pw">
+   253→   853→            <button className="back-btn" onClick={() => nav('all-classes-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+   254→   854→            <span>{currentSubject?.name || 'Subject'}</span>
+   255→   855→          </div>
+   256→   856→          <div className="nav-tabs-pw">
+   257→   857→            <div className={`nav-tab ${chaptersTab === 'UNITS' ? 'active' : ''}`} id="tab-ch-chapters" onClick={() => switchChaptersTab('UNITS')}>Chapters</div>
+   258→   858→            <div className={`nav-tab ${chaptersTab === 'STUDY_MATERIAL' ? 'active' : ''}`} id="tab-ch-study" onClick={() => switchChaptersTab('STUDY_MATERIAL')}>Study Material</div>
+   259→   859→          </div>
+   260→   860→          <div className="px-4 py-3" id="chapters-list">
+   261→   861→            {chaptersLoading ? (
+   262→   862→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   263→   863→            ) : chapters.length === 0 ? (
+   264→   864→              <p className="text-muted text-center p-4">Directory empty.</p>
+   265→   865→            ) : (
+   266→   866→              chapters.map((t, i) => {
+   267→   867→                const code = i < 9 ? `0${i + 1}` : `${i + 1}`;
+   268→   868→                const tagPre = chaptersTab === 'UNITS' ? 'CH' : 'SM';
+   269→   869→                return (
+   270→   870→                  <div className="list-card" key={t._id} onClick={() => openTopic(t)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openTopic(t); }}>
+   271→   871→                    <div style={{ flexGrow: 1 }}>
+   272→   872→                      <span style={{ background: 'var(--sb-primary-light)', color: 'var(--sb-primary)', fontSize: '0.75rem', fontWeight: 800, padding: '3px 8px', borderRadius: 4 }}>{tagPre} - {code}</span>
+   273→   873→                      <div style={{ fontWeight: 700, fontSize: '1.05rem', marginTop: 8 }}>{t.name}</div>
+   274→   874→                    </div>
+   275→   875→                    <i className="fas fa-chevron-right text-muted ms-3"></i>
+   276→   876→                  </div>
+   277→   877→                );
+   278→   878→              })
+   279→   879→            )}
+   280→   880→          </div>
+   281→   881→        </div>
+   282→   882→
+   283→   883→        {/* ================= CONTENT VIEW ================= */}
+   284→   884→        <div id="content-view" className={`view-section ${view === 'content-view' ? 'active-view' : ''}`}>
+   285→   885→          <div className="breadcrumb-pw">
+   286→   886→            <button className="back-btn" onClick={() => nav('chapters-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+   287→   887→            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentTopic?.name || 'Chapter'}</span>
+   288→   888→          </div>
+   289→   889→          <div className="nav-tabs-pw" id="content-tabs">
+   290→   890→            {[['ALL', 'All'], ['LECTURE', 'Lectures'], ['DPP_TEST', 'DPPs'], ['NOTES', 'Notes'], ['DPP_PDF', 'DPP PDFs'], ['DPP_VIDEOS', 'DPP Videos']].map(([key, label]) => (
+   291→   891→              <div key={key} className={`nav-tab ${contentTab === key ? 'active' : ''}`} onClick={() => filterContentTab(key)}>{label}</div>
+   292→   892→            ))}
+   293→   893→          </div>
+   294→   894→          <div className="px-4 py-3" id="content-list">
+   295→   895→            {contentLoading ? (
+   296→   896→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   297→   897→            ) : contentTab === 'DPP_TEST' ? (
+   298→   898→              dppItems.length === 0 ? (
+   299→   899→                <p className="text-center text-muted p-4">No content available.</p>
+   300→   900→              ) : (
+   301→   901→                dppItems.map((t) => renderDppItem(t, t._id))
+   302→   902→              )
+   303→   903→            ) : contentNodes.length === 0 ? (
+   304→   904→              <p className="text-center text-muted p-4">No content available.</p>
+   305→   905→            ) : (
+   306→   906→              contentNodes.map((node) =>
+   307→   907→                node.data && (node.type === 'LECTURE' || node.type === 'DPP_VIDEOS')
+   308→   908→                  ? renderLectureCard(node)
+   309→   909→                  : node.data && (node.type === 'NOTES' || node.type === 'DPP_PDF')
+   310→   910→                    ? renderPdfCard(node)
+   311→   911→                    : null,
+   312→   912→              )
+   313→   913→            )}
+   314→   914→          </div>
+   315→   915→        </div>
+   316→   916→
+   317→   917→        {/* ================= ALL TESTS VIEW ================= */}
+   318→   918→        <div id="all-tests-view" className={`view-section ${view === 'all-tests-view' ? 'active-view' : ''}`}>
+   319→   919→          <div className="breadcrumb-pw">
+   320→   920→            <button className="back-btn" onClick={() => nav('study-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+   321→   921→            <span>Assessments</span>
+   322→   922→          </div>
+   323→   923→          <div className="px-4 py-3" id="tests-list">
+   324→   924→            {testsLoading ? (
+   325→   925→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   326→   926→            ) : tests.length === 0 ? (
+   327→   927→              <p className="text-muted text-center p-4">No tests configured.</p>
+   328→   928→            ) : (
+   329→   929→              tests.map((t) => (
+   330→   930→                <div className="content-card" key={t._id} style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+   331→   931→                  <div className="d-flex align-items-center gap-3 mb-3">
+   332→   932→                    <div style={{ background: '#fef3c7', color: '#d97706', width: 45, height: 45, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem' }}>
+   333→   933→                      <i className="fas fa-tasks"></i>
+   334→   934→                    </div>
+   335→   935→                    <div>
+   336→   936→                      <div style={{ fontWeight: 700, fontSize: '1rem' }}>{t.name || t._id}</div>
+   337→   937→                      <div style={{ color: 'var(--sb-text-muted)', fontSize: '0.8rem', marginTop: 4 }}>
+   338→   938→                        {t.totalQuestions} Qs &bull; {t.totalMarks} Marks
+   339→   939→                      </div>
+   340→   940→                    </div>
+   341→   941→                  </div>
+   342→   942→                  {testPreparing === t._id ? (
+   343→   943→                    <button className="btn-dpp" disabled><i className="fas fa-spinner fa-spin"></i> Preparing...</button>
+   344→   944→                  ) : (
+   345→   945→                    <button className="btn-dpp" onClick={() => launchTestGateway(t._id)}>Attempt Now</button>
+   346→   946→                  )}
+   347→   947→                </div>
+   348→   948→              ))
+   349→   949→            )}
+   350→   950→          </div>
+   351→   951→        </div>
+   352→   952→      </div>
+   353→   953→
+   354→   954→      {/* ================= BATCH INFO MODAL ================= */}
+   355→   955→      <div className={`modal-overlay ${batchInfoOpen ? 'active' : ''}`} id="batch-info-modal" onClick={(e) => { if (e.target === e.currentTarget) setBatchInfoOpen(false); }}>
+   356→   956→        <div className="bottom-sheet" style={{ padding: 0, overflow: 'hidden' }}>
+   357→   957→          <i className="fas fa-times sheet-close" onClick={() => setBatchInfoOpen(false)}></i>
+   358→   958→          <div id="batch-info-content">
+   359→   959→            {batchInfoLoading ? (
+   360→   960→              <div className="loader-center" style={{ padding: '100px 0' }}><i className="fas fa-spinner fa-spin"></i> Fetching Details...</div>
+   361→   961→            ) : !batchInfo ? (
+   362→   962→              <p className="text-center text-muted p-5">Batch details not available.</p>
+   363→   963→            ) : (() => {
+   364→   964→              const thumb = imageUrl(batchInfo.previewImage, DEFAULT_THUMB);
+   365→   965→              const priceText = batchInfo.price === 0
+   366→   966→                ? 'Free'
+   367→   967→                : batchInfo.discount > 0
+   368→   968→                  ? (<span><del className="text-muted" style={{ fontSize: '0.8rem' }}>₹{batchInfo.price + batchInfo.discount}</del> ₹{batchInfo.price}</span>)
+   369→   969→                  : `₹${batchInfo.price}`;
+   370→   970→              const sDate = batchInfo.startDate ? new Date(batchInfo.startDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'TBA';
+   371→   971→              const eDate = batchInfo.endDate ? new Date(batchInfo.endDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'TBA';
+   372→   972→              const teachersMap = new Map<string, TeacherPublic>();
+   373→   973→              (batchInfo.subjects || []).forEach((sub) => {
+   374→   974→                (sub.teacherIds || []).forEach((t) => {
+   375→   975→                  if (!teachersMap.has(t._id)) teachersMap.set(t._id, { ...t, subject: t.subject || sub.subject });
+   376→   976→                });
+   377→   977→              });
+   378→   978→              const teachers = Array.from(teachersMap.values());
+   379→   979→              return (
+   380→   980→                <>
+   381→   981→                  <div style={{ background: `url('${thumb}') center/cover`, height: 200, width: '100%', borderRadius: '20px 20px 0 0', position: 'relative' }}>
+   382→   982→                    <div style={{ position: 'absolute', bottom: 0, left: 0, width: '100%', height: '50%', background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)' }}></div>
+   383→   983→                    <div className="badge bg-danger position-absolute top-0 end-0 m-3 fs-6">{priceText}</div>
+   384→   984→                  </div>
+   385→   985→                  <div className="p-4 pt-3">
+   386→   986→                    <h4 className="fw-bold mb-3">{batchInfo.name}</h4>
+   387→   987→                    <div className="batch-grid-info">
+   388→   988→                      <div className="bg-info-box"><span className="lbl">Class</span><span className="val">{batchInfo.class?.name || 'General'}</span></div>
+   389→   989→                      <div className="bg-info-box"><span className="lbl">Validity</span><span className="val">{batchInfo.validity || 'Till Exams'}</span></div>
+   390→   990→                      <div className="bg-info-box"><span className="lbl">Start Date</span><span className="val">{sDate}</span></div>
+   391→   991→                      <div className="bg-info-box"><span className="lbl">End Date</span><span className="val">{eDate}</span></div>
+   392→   992→                    </div>
+   393→   993→
+   394→   994→                    {teachers.length > 0 ? (
+   395→   995→                      <>
+   396→   996→                        <h6 className="fw-bold mt-4 mb-3" style={{ fontSize: '1.1rem' }}>Know Your Teachers</h6>
+   397→   997→                        <div className="teacher-scroll">
+   398→   998→                          {teachers.map((t) => {
+   399→   999→                            const tImg = imageUrl(t.imageId, `https://ui-avatars.com/api/?name=${encodeURIComponent(`${t.firstName} ${t.lastName || ''}`)}&background=random`);
+   400→  1000→                            const fullName = `${t.firstName || ''} ${t.lastName || ''}`.trim();
+   401→  1001→                            const expText = t.experience ? `${t.experience} Yrs Exp` : '';
+   402→  1002→                            return (
+   403→  1003→                              <div className="teacher-card" key={t._id}>
+   404→  1004→                                <img src={tImg} className="teacher-img" alt={fullName} />
+   405→  1005→                                <div className="fw-bold text-dark text-truncate w-100" style={{ fontSize: '0.85rem' }}>{fullName}</div>
+   406→  1006→                                <div className="text-muted text-truncate w-100" style={{ fontSize: '0.7rem', marginTop: 2 }}>{t.subject}</div>
+   407→  1007→                                <div className="text-muted" style={{ fontSize: '0.7rem' }}>{expText}</div>
+   408→  1008→                                <button className="btn btn-sm btn-outline-primary mt-3" style={{ fontSize: '0.7rem', borderRadius: 20, width: '100%', fontWeight: 700 }} onClick={() => openTeacherModal(t._id)}>View Details</button>
+   409→  1009→                              </div>
+   410→  1010→                            );
+   411→  1011→                          })}
+   412→  1012→                        </div>
+   413→  1013→                      </>
+   414→  1014→                    ) : null}
+   415→  1015→
+   416→  1016→                    <h6 className="fw-bold mt-4 mb-2">About Batch</h6>
+   417→  1017→                    <div className="batch-desc-text">{batchInfo.description || batchInfo.shortDescription || 'No description available for this batch.'}</div>
+   418→  1018→
+   419→  1019→                    <button className="btn btn-outline-danger w-100 mt-4 fw-bold rounded-pill" onClick={() => handleUnenroll(batchInfo._id)}>
+   420→  1020→                      <i className="fas fa-sign-out-alt me-2"></i> Unenroll from Batch
+   421→  1021→                    </button>
+   422→  1022→                  </div>
+   423→  1023→                </>
+   424→  1024→              );
+   425→  1025→            })()}
+   426→  1026→          </div>
+   427→  1027→        </div>
+   428→  1028→      </div>
+   429→  1029→
+   430→  1030→      {/* ================= TEACHER MODAL ================= */}
+   431→  1031→      <div className={`modal-overlay ${teacherOpen ? 'active' : ''}`} id="teacher-details-modal" style={{ zIndex: 2050 }} onClick={(e) => { if (e.target === e.currentTarget) setTeacherOpen(false); }}>
+   432→  1032→        <div className="bottom-sheet" style={{ padding: 0, overflow: 'hidden' }}>
+   433→  1033→          <i className="fas fa-times sheet-close" onClick={() => setTeacherOpen(false)}></i>
+   434→  1034→          <div id="teacher-details-content">
+   435→  1035→            {teacherLoading ? (
+   436→  1036→              <div className="loader-center" style={{ padding: '100px 0' }}><i className="fas fa-spinner fa-spin"></i> Loading Profile...</div>
+   437→  1037→            ) : !teacherData ? (
+   438→  1038→              <div style={{ padding: '40px 20px' }}><p className="text-center text-muted">Teacher details not available.</p></div>
+   439→  1039→            ) : (() => {
+   440→  1040→              const t = teacherData;
+   441→  1041→              const name = `${t.firstName || ''} ${t.lastName || ''}`.trim();
+   442→  1042→              const img = imageUrl(t.imageId, `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=random`);
+   443→  1043→              return (
+   444→  1044→                <>
+   445→  1045→                  <div style={{ width: '100%', height: 120, background: 'linear-gradient(135deg, var(--sb-primary), #818cf8)', position: 'relative' }}></div>
+   446→  1046→                  <div style={{ padding: '0 20px 20px 20px', position: 'relative', marginTop: -45, maxHeight: '60vh', overflowY: 'auto' }}>
+   447→  1047→                    <img src={img} alt={name} style={{ width: 90, height: 90, borderRadius: '50%', objectFit: 'cover', border: '4px solid #fff', background: '#fff', boxShadow: '0 4px 6px rgba(0,0,0,0.1)', position: 'relative', zIndex: 10 }} />
+   448→  1048→                    <div className="mt-2">
+   449→  1049→                      <h4 className="fw-bold m-0 text-dark" style={{ fontSize: '1.3rem' }}>{name}</h4>
+   450→  1050→                      <div style={{ fontWeight: 700, color: 'var(--sb-primary)', fontSize: '0.95rem', marginTop: 4 }}>{t.subject || 'Subject Expert'}</div>
+   451→  1051→                      <div style={{ fontSize: '0.85rem', color: 'var(--sb-text-muted)', fontWeight: 600, marginTop: 4 }}>
+   452→  1052→                        <i className="fas fa-briefcase"></i> {t.experience ? `${t.experience} Yrs Exp` : 'Faculty'}{t.qualification ? ` • ${t.qualification}` : ''}
+   453→  1053→                      </div>
+   454→  1054→                      {t.featuredLine ? (
+   455→  1055→                        <div style={{ fontStyle: 'italic', color: '#4b5563', fontWeight: 600, marginTop: 10, borderLeft: '3px solid var(--sb-primary)', paddingLeft: 10 }}>&quot;{t.featuredLine}&quot;</div>
+   456→  1056→                      ) : null}
+   457→  1057→                    </div>
+   458→  1058→
+   459→  1059→                    {t.tags && t.tags.length > 0 ? (
+   460→  1060→                      <div className="mt-3">
+   461→  1061→                        {t.tags.map((tag, i) => (
+   462→  1062→                          <span key={i} style={{ background: '#fef3c7', color: '#d97706', border: '1px solid #fde68a', fontSize: '0.7rem', fontWeight: 700, padding: '4px 10px', borderRadius: 20, display: 'inline-block', marginRight: 8, marginBottom: 8 }}>
+   463→  1063→                            {tag.replace(/"/g, '')}
+   464→  1064→                          </span>
+   465→  1065→                        ))}
+   466→  1066→                      </div>
+   467→  1067→                    ) : null}
+   468→  1068→
+   469→  1069→                    <hr style={{ borderColor: 'var(--sb-border-color)', margin: '20px 0' }} />
+   470→  1070→
+   471→  1071→                    <h6 className="fw-bold mb-3" style={{ fontSize: '1.1rem' }}>About</h6>
+   472→  1072→                    <div style={{ fontSize: '0.95rem', color: 'var(--sb-text-dark)', lineHeight: 1.6, wordBreak: 'break-word' }}>{t.about || 'No description provided.'}</div>
+   473→  1073→                  </div>
+   474→  1074→                </>
+   475→  1075→              );
+   476→  1076→            })()}
+   477→  1077→          </div>
+   478→  1078→        </div>
+   479→  1079→      </div>
+   480→  1080→
+   481→  1081→      {/* ================= NOTES MODAL ================= */}
+   482→  1082→      <div className={`modal-overlay ${notesOpen ? 'active' : ''}`} id="notes-modal" onClick={(e) => { if (e.target === e.currentTarget) setNotesOpen(false); }}>
+   483→  1083→        <div className="bottom-sheet">
+   484→  1084→          <i className="fas fa-times sheet-close" onClick={() => setNotesOpen(false)}></i>
+   485→  1085→          <h4 style={{ fontWeight: 800, marginBottom: 24, color: 'var(--sb-text-dark)' }}>Attachments</h4>
+   486→  1086→          <div id="notes-modal-content">
+   487→  1087→            {notesLoading ? (
+   488→  1088→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   489→  1089→            ) : (
+   490→  1090→              <>
+   491→  1091→                {noteRows.map((row, i) => (
+   492→  1092→                  <div className="resource-row" key={`n-${i}`}>
+   493→  1093→                    <div className="resource-title"><i className="fas fa-file-pdf text-danger"></i> {row.title}</div>
+   494→  1094→                    <button className="btn-view-pdf" onClick={() => { window.open(row.url, '_blank'); addXP(5, 'Viewed Document'); }}>View</button>
+   495→  1095→                  </div>
+   496→  1096→                ))}
+   497→  1097→                {noteDppRows.map((row, i) => (
+   498→  1098→                  <div className="resource-row" key={`d-${i}`}>
+   499→  1099→                    <div className="resource-title"><i className="fas fa-tasks text-warning"></i> {row.name}</div>
+   500→  1100→                    <button
+   501→  1101→                      className="btn-view-pdf"
+   502→  1102→                      style={{ background: '#fef08a', color: '#a16207', fontWeight: 700 }}
+   503→  1103→                      onClick={() => {
+   504→  1104→                        setNotesOpen(false);
+   505→  1105→                        openDppModal(row);
+   506→  1106→                      }}
+   507→  1107→                    >
+   508→  1108→                      Attempt
+   509→  1109→                    </button>
+   510→  1110→                  </div>
+   511→  1111→                ))}
+   512→  1112→                {noteRows.length === 0 && noteDppRows.length === 0 && !notesLoading ? (
+   513→  1113→                  <p className="text-muted text-center">No resources attached.</p>
+   514→  1114→                ) : null}
+   515→  1115→              </>
+   516→  1116→            )}
+   517→  1117→          </div>
+   518→  1118→        </div>
+   519→  1119→      </div>
+   520→  1120→
+   521→  1121→      {/* ================= DPP MODAL ================= */}
+   522→  1122→      <div className={`modal-overlay ${dppOpen ? 'active' : ''}`} id="dpp-modal" onClick={(e) => { if (e.target === e.currentTarget) setDppOpen(false); }}>
+   523→  1123→        <div className="bottom-sheet">
+   524→  1124→          <i className="fas fa-times sheet-close" onClick={() => setDppOpen(false)}></i>
+   525→  1125→          <h4 style={{ fontWeight: 800, marginBottom: 24, color: 'var(--sb-text-dark)' }}>Choose Attempt Mode</h4>
+   526→  1126→          <div id="dpp-modal-content" className="d-flex flex-column gap-3">
+   527→  1127→            <div className="resource-row" style={{ background: '#eff6ff', border: '1px solid #2563eb', cursor: 'pointer' }} onClick={() => launchDpp('BATCH_QUIZ')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') launchDpp('BATCH_QUIZ'); }}>
+   528→  1128→              <div>
+   529→  1129→                <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#2563eb' }}>Practice Mode</div>
+   530→  1130→                <div style={{ fontSize: '0.8rem', color: 'var(--sb-text-dark)', marginTop: 4 }}>Learn without time pressure</div>
+   531→  1131→              </div>
+   532→  1132→              <i className="fas fa-chevron-right" style={{ color: '#2563eb' }}></i>
+   533→  1133→            </div>
+   534→  1134→            <div className="resource-row" style={{ background: '#fef2f2', border: '1px solid #e11d48', cursor: 'pointer' }} onClick={() => launchDpp('DPP_QUIZ_MODE')} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') launchDpp('DPP_QUIZ_MODE'); }}>
+   535→  1135→              <div>
+   536→  1136→                <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#e11d48' }}>Quiz Mode</div>
+   537→  1137→                <div style={{ fontSize: '0.8rem', color: 'var(--sb-text-dark)', marginTop: 4 }}>Attempt with standard timing</div>
+   538→  1138→              </div>
+   539→  1139→              <i className="fas fa-chevron-right" style={{ color: '#e11d48' }}></i>
+   540→  1140→            </div>
+   541→  1141→          </div>
+   542→  1142→        </div>
+   543→  1143→      </div>
+   544→  1144→
+   545→  1145→      {/* ================= TEST IFRAME MODAL ================= */}
+   546→  1146→      <div className={`iframe-overlay ${testFrame.open ? 'active' : ''}`} id="test-iframe-modal">
+   547→  1147→        <div className="iframe-header">
+   548→  1148→          <h5 className="m-0" style={{ fontWeight: 800, color: 'var(--sb-text-dark)' }}>{testFrame.title}</h5>
+   549→  1149→          <button className="btn btn-sm btn-danger fw-bold rounded-pill px-3" onClick={() => setTestFrame({ open: false, url: '', title: 'Test Attempt' })}>
+   550→  1150→            <i className="fas fa-times me-1"></i> Close
+   551→  1151→          </button>
+   552→  1152→        </div>
+   553→  1153→        <iframe id="test-iframe" className="iframe-content" src={testFrame.open ? testFrame.url : ''} title={testFrame.title} />
+   554→  1154→      </div>
+   555→  1155→    </>
+   556→  1156→  );
+   557→  1157→}
+   558→  1158→

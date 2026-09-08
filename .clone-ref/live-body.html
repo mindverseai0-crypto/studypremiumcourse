@@ -1,0 +1,94 @@
+<body>
+
+    <div class="video-wrapper" id="video-wrapper">
+        <video id="video" playsinline></video>
+        
+        <div class="error-box" id="error-box">
+            <i class="fas fa-video-slash" style="font-size: 2rem; margin-bottom:10px;"></i><br>
+            <span id="error-text">Stream Offline</span>
+        </div>
+
+        <div class="loader-overlay" id="loader">
+            <div class="spinner-ring"></div>
+            <div class="status-text" id="status-text">Connecting to Live Server...</div>
+            <div id="loader-sub" class="text-muted mt-2" style="font-size:0.75rem;">Fetching Secure Credentials</div>
+        </div>
+
+        <div class="controls-overlay" id="controls">
+            <div class="top-bar">
+                <div class="top-left">
+                    <i class="fas fa-arrow-left back-btn" onclick="window.close()"></i>
+                    <div class="live-badge"><i class="fas fa-circle" style="font-size: 0.4rem;"></i> LIVE</div>
+                    <div class="video-title" id="video-title">Class Player</div>
+                </div>
+                <div class="top-icons">
+                     <i class="fas fa-ellipsis-v icon-btn" onclick="openPanel('menu-panel')"></i>
+                </div>
+            </div>
+
+            <div class="center-area" id="center-click-area">
+                <div class="play-pause-center" id="center-play-btn"><i class="fas fa-play"></i></div>
+            </div>
+
+            <div class="bottom-gradient">
+                <div class="time-display"><span id="current-time">00:00</span> / <span id="duration-time">LIVE</span></div>
+                
+                <div class="progress-wrapper" id="progress-wrapper">
+                    <div class="progress-track" id="progress-track">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                </div>
+                
+                <div class="controls-row">
+                    <div class="controls-left">
+                        <div class="play-btn" id="play-btn" onclick="togglePlay()"><i class="fas fa-play"></i></div>
+                        <div class="skip-btn" onclick="seekVideo(-10)"><i class="fas fa-undo-alt"></i><span class="skip-text">10</span></div>
+                        <div class="skip-btn" onclick="seekVideo(10)"><i class="fas fa-redo-alt"></i><span class="skip-text">10</span></div>
+                        <div class="vol-btn" onclick="toggleMute()"><i class="fas fa-volume-up" id="vol-icon"></i></div>
+                    </div>
+                    <div class="controls-right">
+                        <div class="gear-btn" onclick="toggleSettings()"><i class="fas fa-cog"></i></div>
+                         <div class="fullscreen-btn" id="fullscreen-btn"><i class="fas fa-expand"></i></div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="settings-float" id="settings-float">
+                <div class="float-item" onclick="seekToStart()"><span><i class="fas fa-history text-danger"></i> Watch from Start</span></div>
+                <div class="float-item" onclick="cycleSpeed()"><span>Speed</span><span class="float-val"><span id="speed-val">1x</span> <i class="fas fa-chevron-right ms-1"></i></span></div>
+                <div class="float-item" onclick="cycleQuality()"><span>Quality</span><span class="float-val"><span id="quality-val">Auto</span> <i class="fas fa-chevron-right ms-1"></i></span></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="sheet-overlay" id="sheet-overlay" onclick="closePanels(event)">
+        
+        <div class="bottom-sheet" id="menu-panel" style="height: auto;">
+            <div class="sheet-handle-wrap"><div class="sheet-handle"></div></div>
+            <ul class="menu-list mt-2">
+                <li class="menu-item" onclick="openPanel('chat-panel')"><i class="far fa-comment-dots menu-icon"></i> Live Chat</li>
+                <li class="menu-item" onclick="openPanel('polls-panel')"><i class="fas fa-poll menu-icon"></i> Live Polls</li>
+                <li class="menu-item" onclick="openPanel('timeline-panel')"><i class="fas fa-ruler-horizontal menu-icon"></i> Class Slides</li>
+                <li class="menu-item" onclick="openPanel('attach-panel')"><i class="fas fa-paperclip menu-icon"></i> Attachments / Notes</li>
+                <li class="menu-item" onclick="copyLink()"><i class="fas fa-link menu-icon"></i> Copy Link</li>
+            </ul>
+        </div>
+
+       
+        
+        
+
+        
+
+        <div class="bottom-sheet" id="attach-panel" style="height: 60vh;">
+            <div class="sheet-handle-wrap"><div class="sheet-handle"></div></div>
+            <div class="sheet-header">Attachments <i class="fas fa-times close-sheet" onclick="closePanels(null, true)"></i></div>
+            <div class="sheet-content" id="attach-area">
+                <div class="text-center text-muted w-100 mt-4" id="attach-status">Loading Attachments...</div>
+            </div>
+        </div>
+    </div>
+
+    
+</body>
+</html>

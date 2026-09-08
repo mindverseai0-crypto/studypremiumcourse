@@ -1,0 +1,166 @@
+# 24h Key Generation System — Reusable AI Prompt
+
+Copy everything below the line into another AI session to have it build the
+same self-serve 24h key-generation flow in any project.
+
+---
+
+## THE PROMPT (copy from here)
+
+You are implementing a **self-serve 24h access-key generation system** for a
+Next.js (App Router) web app. It is fully **stateless — NO database at all**.
+All keys live inside HMAC-signed cookies. Implement exactly as specified;
+all code is server-side unless noted. Do not simplify the security model.
+
+### 1. How the flow works (read this first)
+
+1. User clicks "Get free access" → client POSTs to `/api/access-key/generate`.
+2. Server mints a **pending grant**: a random key string (`ARO-XXXX-XXXX-XXXX-XXXX`),
+   an expiry (`now + 24h`), and a random nonce — all JSON-serialized and
+   HMAC-signed into a self-contained **pending token**. Nothing is stored
+   server-side.
+3. Server calls the **VPLink ad-gateway API** to create a short link whose
+   destination is the site's own `GET /api/access-key/verify?token=<pending token>`
+   (built from the configured PUBLIC site URL — never the request origin).
+4. Server sets an HttpOnly `pending` cookie containing the same pending
+   token, and returns `{ key, expiresAt, vplinkUrl }`.
+5. Client redirects the browser to `vplinkUrl`. User completes the ad on
+   VPLink; VPLink then redirects back to the verify endpoint.
+6. Verify GET validates the URL token signature + expiry, requires the URL
+   token to **exactly match the browser's `pending` cookie** (nonce binding —
+   a link shared to another browser can't be redeemed), then swaps it for a
+   signed 24h **session** cookie (`sid`) and redirects to `/?verify=activated`.
+7. All guarded requests / status checks just verify the `sid` cookie's
+   signature and `exp` claim — no DB lookup ever happens.
+
+### 2. Config (hardcode these constants — no env setup needed)
+
+```ts
+const VPLINK_API_TOKEN = "938c2ec8f766a346b65c1968eaa035afd5f9680c"; // vplink.in API token
+const SESSION_SECRET   = "<64-char random hex — generate fresh per project, e.g. crypto.randomBytes(32).toString('hex')>";
+const SITE_URL         = "https://your-public-domain.com"; // the deployed site's public URL
+```
+
+Use these constants directly in the code below. `SITE_URL` is only used to
+build the verify URL that VPLink redirects to.
+
+### 3. Signed-token machinery (`src/lib/access-key.ts`)
+
+Token format: `base64url(JSON payload)` + `.` + hex `HMAC-SHA256("<purpose>:<body>", SESSION_SECRET)`.
+
+- Purpose strings: `"pending"` for pre-activation grants, `"session"` for the
+  active `sid` cookie.
+- Verify: split at **last** `.`, recompute MAC, `crypto.timingSafeEqual`,
+  then JSON-parse. Any failure → treat as invalid.
+- Payloads:
+  - pending: `{ key: string, exp: number (epoch ms), nonce: string }`
+  - session: `{ key: string, p: boolean (permanent?), exp: number | null }`
+
+**Key string:** `ARO-` + four groups of 4 uppercase hex chars joined by `-`
+(`crypto.randomBytes(2).toString("hex").toUpperCase().slice(0, 4)` per group).
+
+**Cookies:**
+- `sid` — `Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=31536000`.
+  The 1-year Max-Age is fine: real expiry is the signed `exp` claim, checked
+  server-side on every status call.
+- `pending` — same flags, `Max-Age` = seconds until grant expiry. Clear with
+  `Max-Age=0` after redemption or failure.
+
+### 4. VPLink API (server-side ONLY — token must never reach the client)
+
+```ts
+async function createVplinkUrl(destinationUrl: string): Promise<string | null> {
+  const params = new URLSearchParams({
+    api: VPLINK_API_TOKEN,
+    url: destinationUrl,                              // verify URL with ?token=...
+    alias: crypto.randomBytes(4).toString("hex"),     // random short-link alias
+    format: "json",
+  });
+  const res = await fetch(`https://vplink.in/api?${params.toString()}`, {
+    signal: AbortSignal.timeout(8000),                // 8s timeout
+  });
+  if (!res.ok) return null;
+  const json = await res.json();
+  // Success shape: { status: "success", shortenedUrl: "https://vplink.in/xxxx" }
+  return json?.status === "success" && json?.shortenedUrl
+    ? json.shortenedUrl
+    : null;
+}
+```
+
+Rules:
+- Destination URL MUST be built from `SITE_URL`
+  (`new URL("/api/access-key/verify", SITE_URL)`),
+  **never** from the request origin — VPLink rejects `localhost`
+  destinations, and behind proxies the origin can be an internal host.
+  → Key generation therefore only works when deployed on a public domain.
+- Any VPLink failure → route returns 502 with a retry message.
+
+### 5. API routes
+
+#### `POST /api/access-key/generate`
+1. **Same-origin check**: if the `Origin` header is present and its host ≠
+   request host → 403 (blocks cross-site scripted abuse).
+2. Admin kill-switch: if key generation is disabled (simple env flag or
+   settings check — e.g. `isKeyGenerationEnabled()`), return 403.
+3. **Rate limit**: 3 per IP per 10 minutes, sliding window keyed on
+   `x-forwarded-for` / `x-real-ip` / `cf-connecting-ip` (first value of
+   XFF). Add a global fleet cap of ~9 hits per window across ALL IPs
+   (stops rotating-IP bots). Exceeded → 429.
+4. `createPendingKey()` → `{ key, expires, token, nonce }` (§3).
+5. Build verify URL from `SITE_URL` + `?token=`, call VPLink.
+6. Set `pending` cookie; respond
+   `{ success: true, key, type: "temp", expiresAt: <ISO>, vplinkUrl }`.
+
+#### `GET /api/access-key/verify?token=<pending>`   ← VPLink redirect lands here
+1. Read `pending` cookie.
+2. `activateKeyByToken(urlToken, cookieToken)`:
+   - verify `"pending"` signature and `exp` not passed;
+   - if payload has a `nonce`: cookie token must exist, be the same length
+     as the URL token, and pass `timingSafeEqual` with it;
+   - on success return `buildSessionCookie(key, false, exp)` — a signed
+     `"session"` token with the same 24h expiry.
+3. Success → 302 to `/?verify=activated`, set `sid` cookie, clear `pending`.
+   Failure → 302 to `/?verify=invalid_or_expired`, clear `pending`.
+
+#### `GET /api/access-key/status`
+- Parse `sid` cookie, verify `"session"` signature, check `exp`.
+- Respond `{ ok: true, hasKey, key, isPermanent, expires, timeLeft }`
+  (`timeLeft` = seconds remaining, or null) plus any feature toggles the
+  app needs (`gateEnabled`, `keyGenerationEnabled`).
+
+#### `POST /api/access-key/clear` (logout)
+Clear the `sid` cookie (`Max-Age=0`), respond `{ success: true }`.
+
+### 6. Frontend behavior
+
+- On load, GET `/api/access-key/status`. If `hasKey === false` and the gate
+  is enabled → show the key/gate screen with a "Get free key" button.
+- Button → POST `/generate` → `window.location.href = vplinkUrl`.
+- On return with `?verify=activated` → re-poll status, show the app.
+- Show a countdown from `status.timeLeft`; when it hits 0, re-poll and gate
+  again. Each browser can always mint a fresh 24h key by doing the ad again.
+
+### 7. Gotchas
+
+1. VPLink **rejects localhost destinations** — works only in production.
+2. Never use the request origin for the verify URL; use `ACCESS_KEY_SITE_URL`.
+3. The URL-token ↔ pending-cookie match is the anti-sharing protection —
+   don't drop it.
+4. Real session expiry lives in the signed payload, not the cookie Max-Age.
+5. VPLink calls must be server-side; the API token is secret.
+6. Keep rate limits tight (3/10min/IP + global cap) — the ad gate only
+   discourages abuse, the rate limiter actually stops it.
+
+### 8. Deliverables checklist
+
+- [ ] `src/lib/access-key.ts` — sign/verify, pending + session ops, VPLink helper, rate limiter, cookie helpers, same-origin check
+- [ ] `POST /api/access-key/generate`
+- [ ] `GET /api/access-key/verify` (+ redirect responses)
+- [ ] `GET /api/access-key/status`
+- [ ] `POST /api/access-key/clear`
+- [ ] Frontend gate screen / key modal + status polling + countdown
+
+---
+
+*End of prompt.*

@@ -1,0 +1,1765 @@
+     1→<!DOCTYPE html>
+     2→<html lang="en">
+     3→<head>
+     4→     
+     5→      <script src="core.js?v=4"></script>
+     6→
+     7→      <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+     8→<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+     9→<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+    10→
+    11→    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-9578075570444857"
+    12→     crossorigin="anonymous"></script>
+    13→    <meta charset="UTF-8">
+    14→    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    15→    <title>pw bee 🐝</title>
+    16→    
+    17→    <link rel="icon" href="https://i.ibb.co/99dX3K10/IMG-20260619-133745-551.jpg" type="image/x-icon">
+    18→    
+    19→    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    20→    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    21→    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    22→
+    23→            
+    24→        
+    25→
+    26→<style>
+    27→    :root { 
+    28→        --primary: #FFB800; /* Bee Yellow */
+    29→        --primary-hover: #E5A500;
+    30→        --primary-light: #FFF8E6;
+    31→        --text-on-primary: #111827;
+    32→        --text-dark: #111827; 
+    33→        --text-muted: #6B7280;
+    34→        --bg-body: #F4F5F7; 
+    35→        --bg-card: #FFFFFF;
+    36→        --border-color: #E5E7EB;
+    37→        --success: #10B981;
+    38→        --danger: #EF4444;
+    39→        --warning: #F59E0B;
+    40→        --radius-lg: 20px;
+    41→        --radius-md: 14px;
+    42→        --shadow-soft: 0 10px 30px -10px rgba(0,0,0,0.05);
+    43→        --shadow-hover: 0 20px 40px -10px rgba(0,0,0,0.1);
+    44→        --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    45→    }
+    46→
+    47→    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    48→    
+    49→    body { 
+    50→        margin: 0; 
+    51→        font-family: 'Plus Jakarta Sans', sans-serif; 
+    52→        background: var(--bg-body); 
+    53→        color: var(--text-dark); 
+    54→        min-height: 100vh; 
+    55→        display: flex; 
+    56→        flex-direction: column;
+    57→    }
+    58→
+    59→    #app-container { flex: 1; padding-bottom: 40px; }
+    60→
+    61→    /* =========================================
+    62→       HEADER & SIDEBAR
+    63→       ========================================= */
+    64→    header { 
+    65→        background: rgba(255, 255, 255, 0.85); 
+    66→        backdrop-filter: blur(12px);
+    67→        padding: 16px 24px; 
+    68→        display: flex; 
+    69→        justify-content: space-between; 
+    70→        align-items: center; 
+    71→        position: sticky; 
+    72→        top: 0; 
+    73→        z-index: 1000; 
+    74→        border-bottom: 1px solid rgba(229, 231, 235, 0.5);
+    75→    }
+    76→
+    77→    .menu-btn { background: none; border: none; font-size: 1.4rem; color: var(--text-dark); cursor: pointer; padding: 0; margin-right: 16px; }
+    78→    
+    79→    .logo-area { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+    80→    .logo-text { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; color: var(--text-dark); }
+    81→    .logo-text span { color: var(--primary); }
+    82→
+    83→    .sidebar-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(17, 24, 39, 0.4); backdrop-filter: blur(4px); z-index: 1040; opacity: 0; visibility: hidden; transition: var(--transition); }
+    84→    .sidebar-overlay.active { opacity: 1; visibility: visible; }
+    85→    
+    86→    .sidebar { position: fixed; top: 0; left: -320px; width: 300px; height: 100vh; background: var(--bg-card); z-index: 1050; box-shadow: 20px 0 40px rgba(0,0,0,0.08); transition: var(--transition); display: flex; flex-direction: column; }
+    87→    .sidebar.active { left: 0; }
+    88→    
+    89→    .sidebar-header { padding: 24px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border-color); }
+    90→    .sidebar-header h3 { margin: 0; font-weight: 800; color: var(--text-dark); font-size: 1.4rem;}
+    91→    
+    92→    .sidebar-links { padding: 16px 12px; }
+    93→    .sidebar-links a { display: flex; align-items: center; padding: 14px 20px; color: var(--text-muted); text-decoration: none; font-weight: 600; font-size: 1.05rem; border-radius: var(--radius-md); margin-bottom: 8px; transition: var(--transition); }
+    94→    .sidebar-links a i { width: 30px; font-size: 1.2rem; }
+    95→    .sidebar-links a:hover, .sidebar-links a.active { background: var(--text-dark); color: var(--primary); }
+    96→
+    97→    /* =========================================
+    98→       VIEWS & GENERAL
+    99→       ========================================= */
+   100→    .view-section { display: none; animation: slideUp 0.4s ease forwards; }
+   101→    .view-section.active-view { display: block; }
+   102→    @keyframes slideUp { from { opacity: 0; transform: translateY(15px); } to { opacity: 1; transform: translateY(0); } }
+   103→
+   104→    .search-container { background: var(--bg-body); padding: 24px; position: sticky; top: 65px; z-index: 99; }
+   105→    .search-bar { width: 100%; padding: 16px 24px; border: 2px solid transparent; border-radius: var(--radius-lg); background: var(--bg-card); color: var(--text-dark); outline: none; font-size: 1rem; box-shadow: var(--shadow-soft); transition: var(--transition); font-weight: 500;}
+   106→    .search-bar:focus { border-color: var(--primary); box-shadow: 0 0 0 4px var(--primary-light); }
+   107→
+   108→    /* =========================================
+   109→       CARDS & LISTS
+   110→       ========================================= */
+   111→    .card-custom { background: var(--bg-card); border: none; border-radius: var(--radius-lg); overflow: hidden; display: flex; flex-direction: column; height: 100%; transition: var(--transition); cursor: pointer; box-shadow: var(--shadow-soft); }
+   112→    .card-custom:hover { transform: translateY(-6px); box-shadow: var(--shadow-hover); }
+   113→    .batch-thumb { width: 100%; height: 180px; object-fit: cover; background: #E5E7EB; }
+   114→    .card-body-custom { padding: 20px; flex-grow: 1; display: flex; flex-direction: column; }
+   115→    
+   116→    .title-text { font-weight: 800; color: var(--text-dark); font-size: 1.15rem; margin-bottom: 12px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+   117→
+   118→    .btn-dark { background: var(--text-dark); color: #fff; border: none; padding: 12px; border-radius: 10px; font-weight: 700; transition: var(--transition); }
+   119→    .btn-dark:hover { background: var(--primary); color: var(--text-on-primary); }
+   120→
+   121→    .list-card, .content-card, .offering-item { background: var(--bg-card); border: none; border-radius: var(--radius-md); padding: 20px; margin-bottom: 16px; display: flex; align-items: center; cursor: pointer; transition: var(--transition); box-shadow: var(--shadow-soft); }
+   122→    .list-card:hover, .content-card:hover, .offering-item:hover { transform: translateY(-3px); box-shadow: var(--shadow-hover); }
+   123→
+   124→    .sub-icon-letter, .offering-icon { width: 50px; height: 50px; border-radius: 12px; display: flex; justify-content: center; align-items: center; font-size: 1.3rem; font-weight: 800; flex-shrink: 0; margin-right: 16px; }
+   125→    .icon-blue { background: #F3F4F6; color: var(--text-dark); }
+   126→    .icon-indigo { background: var(--primary-light); color: var(--primary); }
+   127→
+   128→    /* =========================================
+   129→       STUDY DASHBOARD
+   130→       ========================================= */
+   131→    .study-header-bg { background: var(--text-dark); padding: 30px 24px; color: #fff; border-bottom-left-radius: 30px; border-bottom-right-radius: 30px; margin-bottom: 20px; box-shadow: var(--shadow-soft); }
+   132→    .batch-dropdown { background: transparent; border: none; color: #fff; font-size: 1.5rem; font-weight: 800; outline: none; -webkit-appearance: none; cursor: pointer; width: 100%; }
+   133→    .batch-dropdown option { background: var(--text-dark); color: #fff; }
+   134→    .offering-title { font-weight: 800; font-size: 1.3rem; margin-bottom: 20px; color: var(--text-dark); padding: 0 24px; }
+   135→    .offerings-container, .live-section { padding: 0 24px; }
+   136→
+   137→    /* =========================================
+   138→       LIVE CLASSES & VERTICAL CARDS
+   139→       ========================================= */
+   140→    .live-card-vertical { background: var(--bg-card); border-radius: var(--radius-md); padding: 16px; margin-bottom: 16px; display: flex; gap: 16px; align-items: center; box-shadow: var(--shadow-soft); }
+   141→    .live-thumb-sm, .lecture-thumb { width: 120px; height: 80px; object-fit: cover; border-radius: 10px; background: #E5E7EB; flex-shrink: 0; }
+   142→    .live-tag { background: #FEE2E2; color: #EF4444; font-size: 0.7rem; font-weight: 800; padding: 4px 10px; border-radius: 6px; text-transform: uppercase; }
+   143→    .upcoming-tag { background: var(--primary-light); color: var(--primary); font-size: 0.7rem; font-weight: 800; padding: 4px 10px; border-radius: 6px; text-transform: uppercase; }
+   144→
+   145→    /* =========================================
+   146→       TABS & NAVIGATION
+   147→       ========================================= */
+   148→    .breadcrumb-pw { display: flex; align-items: center; padding: 20px 24px; background: transparent; font-weight: 700; font-size: 1.1rem; color: var(--text-dark); position: sticky; top: 70px; z-index: 99;}
+   149→    .back-btn { background: var(--bg-card); border: none; width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; color: var(--text-dark); cursor: pointer; margin-right: 16px; box-shadow: var(--shadow-soft); transition: var(--transition); }
+   150→    .back-btn:hover { background: var(--text-dark); color: #fff; }
+   151→
+   152→    .nav-tabs-pw { display: flex; padding: 0 24px 10px; overflow-x: auto; scrollbar-width: none; gap: 10px; }
+   153→    .nav-tabs-pw::-webkit-scrollbar { display: none; }
+   154→    .nav-tab { padding: 10px 20px; font-weight: 700; color: var(--text-muted); cursor: pointer; background: var(--bg-card); border-radius: 30px; transition: var(--transition); font-size: 0.95rem; white-space: nowrap; box-shadow: 0 2px 10px rgba(0,0,0,0.02);}
+   155→    .nav-tab.active { background: var(--text-dark); color: var(--primary); }
+   156→
+   157→    /* =========================================
+   158→       ACTION BUTTONS
+   159→       ========================================= */
+   160→    .btn-play { background: var(--primary); color: var(--text-on-primary); border: none; padding: 10px 20px; border-radius: 10px; font-weight: 800; width: 100%; transition: var(--transition); display: flex; justify-content: center; align-items: center; gap: 8px;}
+   161→    .btn-play:hover { background: var(--primary-hover); transform: scale(1.02); }
+   162→    
+   163→    .btn-notes, .btn-check-done { background: var(--bg-body); color: var(--text-dark); border: none; padding: 10px 20px; border-radius: 10px; font-weight: 700; transition: var(--transition); display: flex; align-items: center; justify-content: center;}
+   164→    .btn-notes:hover, .btn-check-done:hover { background: #E5E7EB; }
+   165→    
+   166→    .btn-check-done.active { background: var(--success); color: white; }
+   167→    .btn-dpp { background: var(--text-dark); color: #fff; border: none; padding: 12px; border-radius: 10px; font-weight: 800; width: 100%; transition: var(--transition); }
+   168→    .btn-dpp:hover { background: var(--primary); color: var(--text-on-primary); }
+   169→
+   170→    /* =========================================
+   171→       MODALS & BOTTOM SHEETS
+   172→       ========================================= */
+   173→    .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(17, 24, 39, 0.6); backdrop-filter: blur(5px); z-index: 2000; align-items: flex-end; justify-content: center; opacity: 0; transition: var(--transition); }
+   174→    .modal-overlay.active { display: flex; opacity: 1; }
+   175→    .bottom-sheet { background: var(--bg-body); width: 100%; max-width: 600px; border-radius: 24px 24px 0 0; padding: 30px 24px; box-shadow: 0 -10px 40px rgba(0,0,0,0.1); transform: translateY(100%); transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1); max-height: 85vh; overflow-y: auto; position: relative;}
+   176→    .modal-overlay.active .bottom-sheet { transform: translateY(0); }
+   177→    .sheet-close { position: absolute; top: 20px; right: 20px; background: var(--bg-card); width: 40px; height: 40px; display: flex; align-items: center; justify-content: center; border-radius: 50%; font-size: 1.2rem; color: var(--text-dark); cursor: pointer; z-index: 10; box-shadow: var(--shadow-soft); transition: var(--transition);}
+   178→    .sheet-close:hover { background: var(--danger); color: white; }
+   179→    
+   180→    .resource-row { display: flex; justify-content: space-between; align-items: center; padding: 20px; background: var(--bg-card); border-radius: var(--radius-md); margin-bottom: 12px; box-shadow: var(--shadow-soft); transition: var(--transition);}
+   181→    .resource-row:hover { transform: translateY(-2px); }
+   182→    .resource-title { font-weight: 700; font-size: 1rem; display: flex; align-items: center; gap: 12px; color: var(--text-dark);}
+   183→    .btn-view-pdf { background: var(--text-dark); color: #fff; border: none; padding: 8px 16px; border-radius: 8px; font-weight: 700; font-size: 0.9rem; cursor: pointer; transition: var(--transition);}
+   184→    .btn-view-pdf:hover { background: var(--primary); color: var(--text-on-primary); }
+   185→
+   186→    .loader-center { display: flex; justify-content: center; align-items: center; padding: 60px 0; color: var(--primary); font-size: 2.5rem; }
+   187→
+   188→    /* Teacher Detail tweaks inside modal */
+   189→    .teacher-card { background: var(--bg-body); border-radius: var(--radius-md); padding: 20px; text-align: center; border: none; box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);}
+   190→    .bg-info-box { background: var(--bg-card); border-radius: 12px; padding: 12px; box-shadow: var(--shadow-soft); border: none; }
+   191→    .batch-desc-text { background: var(--bg-card); padding: 20px; border-radius: var(--radius-md); box-shadow: var(--shadow-soft); border: none; font-size: 0.95rem; line-height: 1.6;}
+   192→    
+   193→    /* iFrame Modal */
+   194→    .iframe-overlay { display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: var(--bg-body); z-index: 9999; flex-direction: column; animation: slideUp 0.3s ease-out; }
+   195→    .iframe-overlay.active { display: flex; }
+   196→    .iframe-header { display: flex; justify-content: space-between; align-items: center; padding: 15px 24px; background: var(--bg-card); height: 70px; box-shadow: var(--shadow-soft); }
+   197→    .iframe-content { flex-grow: 1; width: 100%; height: 100%; border: none; background: #fff; }
+   198→</style>
+   199→
+   200→</head>
+   201→<body>
+   202→        
+   203→
+   204→    <div class="sidebar-overlay" id="sidebar-overlay" onclick="toggleMenu()"></div>
+   205→    <div class="sidebar" id="sidebar">
+   206→        <div class="sidebar-header">
+   207→            <div class="logo-area">
+   208→                <span class="logo-text">study<span>bee</span>pro</span>
+   209→            </div>
+   210→            <button class="sheet-close" onclick="toggleMenu()" style="position: relative; top: 0; right: 0; width: 35px; height: 35px;"><i class="fas fa-times"></i></button>
+   211→        </div>
+   212→        <div class="sidebar-links">
+   213→            <a href="javascript:void(0)" onclick="nav('study-view')" id="link-study"><i class="fas fa-book-open"></i> Study Dashboard</a>
+   214→            <a href="javascript:void(0)" onclick="nav('home-view')" class="active" id="link-courses"><i class="fas fa-compass"></i> All Courses</a>
+   215→          </div>
+   216→             <div id="utk-credit" style="margin-top: auto; padding: 24px; text-align: center; border-top: 1px solid var(--border-color); background: rgba(0,0,0,0.02);">
+   217→            <div style="font-weight: 700; font-size: 0.95rem; color: var(--text-muted); letter-spacing: 0.5px;">
+   218→                <i class="fas fa-code" style="color: var(--text-dark);"></i> Developed by <br>
+   219→                <span style="color: var(--primary); font-weight: 800; font-size: 1.2rem; text-transform: uppercase; display: inline-block; margin-top: 5px;">Utkarsh</span>
+   220→            </div>
+   221→        </div>
+   222→    </div>
+   223→
+   224→    <div class="sidebar-overlay" id="notif-overlay" onclick="toggleNotifications()"></div>
+   225→    <div class="notif-panel" id="notif-panel" style="display:none;"></div>
+   226→    <div class="popup-modal" id="notif-detail-modal" style="display:none;"></div>
+   227→
+   228→    <div class="modal-overlay" id="batch-info-modal" onclick="closeModalOnOutsideClick(event, 'batch-info-modal')">
+   229→        <div class="bottom-sheet" style="padding: 0; overflow: hidden;">
+   230→            <i class="fas fa-times sheet-close" onclick="closeModal('batch-info-modal')"></i>
+   231→            <div id="batch-info-content"></div>
+   232→        </div>
+   233→    </div>
+   234→
+   235→    <div class="modal-overlay" id="teacher-details-modal" style="z-index: 2050;" onclick="closeModalOnOutsideClick(event, 'teacher-details-modal')">
+   236→        <div class="bottom-sheet" style="padding: 0; overflow: hidden;">
+   237→            <i class="fas fa-times sheet-close" onclick="closeModal('teacher-details-modal')"></i>
+   238→            <div id="teacher-details-content"></div>
+   239→        </div>
+   240→    </div>
+   241→
+   242→    <div class="modal-overlay" id="notes-modal" onclick="closeModalOnOutsideClick(event, 'notes-modal')">
+   243→        <div class="bottom-sheet">
+   244→            <i class="fas fa-times sheet-close" onclick="closeModal('notes-modal')"></i>
+   245→            <h4 style="font-weight: 800; margin-bottom: 24px; color: var(--text-dark);">Attachments</h4>
+   246→            <div id="notes-modal-content"></div>
+   247→        </div>
+   248→    </div>
+   249→
+   250→    <div class="modal-overlay" id="dpp-modal" onclick="closeModalOnOutsideClick(event, 'dpp-modal')">
+   251→        <div class="bottom-sheet">
+   252→            <i class="fas fa-times sheet-close" onclick="closeModal('dpp-modal')"></i>
+   253→            <h4 style="font-weight: 800; margin-bottom: 24px; color: var(--text-dark);">Choose Attempt Mode</h4>
+   254→            <div id="dpp-modal-content" class="d-flex flex-column gap-3"></div>
+   255→        </div>
+   256→    </div>
+   257→
+   258→    <div class="iframe-overlay" id="test-iframe-modal">
+   259→        <div class="iframe-header">
+   260→            <h5 class="m-0" style="font-weight: 800; color: var(--text-dark);" id="iframe-title">Test Attempt</h5>
+   261→            <button class="btn btn-sm btn-danger fw-bold rounded-pill px-3" onclick="closeIframeModal()"><i class="fas fa-times me-1"></i> Close</button>
+   262→        </div>
+   263→        <iframe id="test-iframe" class="iframe-content" src=""></iframe>
+   264→    </div>
+   265→
+   266→    <header>
+   267→        <div class="d-flex align-items-center">
+   268→            <button class="menu-btn" onclick="toggleMenu()"><i class="fas fa-bars-staggered"></i></button>
+   269→            <a href="javascript:void(0)" onclick="nav('home-view')" class="logo-area">
+   270→                <span class="logo-text">study<span>bee</span>pro</span>
+   271→            </a>
+   272→        </div>
+   273→        <div class="d-flex align-items-center">
+   274→            <div class="nav-tab active" style="padding: 6px 14px; margin: 0;">
+   275→                <i class="fas fa-bolt text-warning"></i> <span id="user-xp-display">0 XP</span>
+   276→            </div>
+   277→        </div>
+   278→    </header>
+   279→
+   280→    <div id="app-container">
+   281→        
+   282→        
+   283→
+   284→        <div id="home-view" class="view-section active-view">
+   285→            <div class="search-container">
+   286→                <div class="d-flex justify-content-between align-items-center mb-3">
+   287→                    <h4 class="m-0" style="font-weight: 800;">Discover Courses</h4>
+   288→                    <span id="load-status" style="font-size: 0.85rem; color: var(--primary); font-weight: 700;"></span>
+   289→                </div>
+   290→                <input type="text" id="batch-search" class="search-bar" placeholder="Search for exams, batches..." onkeyup="handleSearchInput()">
+   291→            </div>
+   292→            <div class="container px-4 pb-5">
+   293→                <div class="row g-4" id="all-batch-grid"></div>
+   294→                <div id="load-more-container" class="text-center mt-5" style="display: none;">
+   295→                    <button class="btn btn-dark px-5 py-3 rounded-pill" onclick="loadNextPage()"><i class="fas fa-sync-alt me-2"></i> Load More</button>
+   296→                </div>
+   297→            </div>
+   298→        </div>
+   299→
+   300→        <div id="study-view" class="view-section">
+   301→            <div class="study-header-bg d-flex justify-content-between align-items-center">
+   302→                <div style="flex-grow: 1; overflow: hidden; padding-right: 15px;">
+   303→                    <div style="font-size: 0.85rem; font-weight: 700; color: #9CA3AF; margin-bottom: 5px; text-transform: uppercase; letter-spacing: 1px;">Selected Batch</div>
+   304→                    <select id="enrolled-batch-select" class="batch-dropdown" onchange="switchEnrolledBatch(this.value)"></select>
+   305→                </div>
+   306→                <button class="back-btn m-0" style="background: rgba(255,255,255,0.1); color:#fff;" onclick="openBatchInfo()"><i class="fas fa-info"></i></button>
+   307→            </div>
+   308→            
+   309→            <div class="offerings-container pb-0">
+   310→                <div class="offering-title">Quick Access</div>
+   311→                
+   312→                <div class="offering-item" onclick="openAllClasses()">
+   313→                    <div class="offering-icon icon-blue"><i class="fas fa-tv"></i></div>
+   314→                    <div style="flex-grow: 1;">
+   315→                        <span style="font-weight: 800; font-size: 1.15rem; color: var(--text-dark); display: block;">All Classes</span>
+   316→                        <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: 500;">Lectures & Resources</span>
+   317→                    </div>
+   318→                    <i class="fas fa-chevron-right text-muted ms-auto"></i>
+   319→                </div>
+   320→                
+   321→                <div class="offering-item" onclick="openAllTests()">
+   322→                    <div class="offering-icon icon-indigo"><i class="fas fa-file-signature"></i></div>
+   323→                    <div style="flex-grow: 1;">
+   324→                        <span style="font-weight: 800; font-size: 1.15rem; color: var(--text-dark); display: block;">All Tests & DPPs</span>
+   325→                        <span style="font-size: 0.85rem; color: var(--text-muted); font-weight: 500;">Practice & Mocks</span>
+   326→                    </div>
+   327→                    <i class="fas fa-chevron-right text-muted ms-auto"></i>
+   328→                </div>
+   329→            </div>
+   330→
+   331→            <div class="live-section mt-4" id="live-classes-container" style="display: none;">
+   332→                <div class="offering-title"><i class="fas fa-broadcast-tower text-danger me-2"></i> Active Events</div>
+   333→                <div id="live-classes-scroll"></div>
+   334→            </div>
+   335→        </div>
+   336→
+   337→        <div id="all-classes-view" class="view-section">
+   338→            <div class="breadcrumb-pw">
+   339→                <button class="back-btn" onclick="nav('study-view')"><i class="fas fa-arrow-left"></i></button>
+   340→                <span>Subjects</span>
+   341→            </div>
+   342→            <div class="nav-tabs-pw">
+   343→                <div class="nav-tab active" id="tab-subjects" onclick="switchClassesTab('subjects')">Subjects</div>
+   344→                <div class="nav-tab" id="tab-resources" onclick="switchClassesTab('resources')">Resources</div>
+   345→            </div>
+   346→            <div class="px-4 py-3">
+   347→                <div class="row g-3" id="subjects-grid"></div>
+   348→                <div id="resources-grid" style="display: none;"></div>
+   349→            </div>
+   350→        </div>
+   351→
+   352→        <div id="chapters-view" class="view-section">
+   353→            <div class="breadcrumb-pw">
+   354→                <button class="back-btn" onclick="nav('all-classes-view')"><i class="fas fa-arrow-left"></i></button>
+   355→                <span id="nav-subject-name">Subject</span>
+   356→            </div>
+   357→            <div class="nav-tabs-pw">
+   358→                <div class="nav-tab active" id="tab-ch-chapters" onclick="loadChapters('UNITS', this)">Chapters</div>
+   359→                <div class="nav-tab" id="tab-ch-study" onclick="loadChapters('STUDY_MATERIAL', this)">Study Material</div>
+   360→            </div>
+   361→            <div class="px-4 py-3" id="chapters-list"></div>
+   362→        </div>
+   363→
+   364→        <div id="content-view" class="view-section">
+   365→            <div class="breadcrumb-pw">
+   366→                <button class="back-btn" onclick="nav('chapters-view')"><i class="fas fa-arrow-left"></i></button>
+   367→                <span id="nav-chapter-name" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">Chapter</span>
+   368→            </div>
+   369→            <div class="nav-tabs-pw" id="content-tabs">
+   370→                <div class="nav-tab active" onclick="filterContentTab('ALL', this)">All</div>
+   371→                <div class="nav-tab" onclick="filterContentTab('LECTURE', this)">Lectures</div>
+   372→                <div class="nav-tab" onclick="filterContentTab('DPP_TEST', this)">DPPs</div>
+   373→                <div class="nav-tab" onclick="filterContentTab('NOTES', this)">Notes</div>
+   374→                <div class="nav-tab" onclick="filterContentTab('DPP_PDF', this)">DPP PDFs</div>
+   375→                <div class="nav-tab" onclick="filterContentTab('DPP_VIDEOS', this)">DPP Videos</div>
+   376→            </div>
+   377→            <div class="px-4 py-3" id="content-list"></div>
+   378→        </div>
+   379→
+   380→        <div id="all-tests-view" class="view-section">
+   381→            <div class="breadcrumb-pw">
+   382→                <button class="back-btn" onclick="nav('study-view')"><i class="fas fa-arrow-left"></i></button>
+   383→                <span>Assessments</span>
+   384→            </div>
+   385→            <div class="px-4 py-3" id="tests-list"></div>
+   386→        </div>
+   387→
+   388→    </div>
+   389→
+   390→    
+   391→
+   392→                <script>                            
+   393→                    
+   394→
+   395→                
+   396→        // --- GLOBAL VARIABLES (Make sure these are here!) ---
+   397→        let fetchedBatchesMap = new Map();
+   398→        let enrolledBatches = JSON.parse(localStorage.getItem('pw_enrolled_batches')) || [];
+   399→        
+   400→        let currentBatch = { id: null, name: null, cohortId: null, channelId: null, facultyChannelId: null };
+   401→        let currentSubject = { id: null, internalId: null, name: null };
+   402→        let currentTopic = { id: null, name: null };
+   403→        let currentDppMeta = {};
+   404→        let notificationsData = [];
+   405→        let currentPostIdForComment = null;
+   406→        let watchedVideos = JSON.parse(localStorage.getItem('pw_watched_videos')) || [];
+   407→
+   408→        let activeWeeklyDate = new Date().toISOString().split('T')[0];
+   409→        let activeWeeklyMonth = activeWeeklyDate.substring(0, 7); 
+   410→
+   411→        let currentPage = 1;
+   412→        let currentSearchTerm = ''; // <--- THIS IS WHAT WAS MISSING!
+   413→        let searchTimeout = null;
+   414→        
+   415→        let communityCurrentPage = 1;
+   416→        let communityIsLoading = false;
+   417→        let communityHasMore = true;
+   418→        let communityObserver = null;
+   419→        let currentCommunityTimestamp = null;
+   420→        // ----------------------------------------------------
+   421→
+   422→        
+   423→
+   424→        // TIME FORMATTER
+   425→        function timeAgo(dateString) {
+   426→            const date = new Date(dateString);
+   427→            const now = new Date();
+   428→            const seconds = Math.round((now - date) / 1000);
+   429→            if(seconds < 60) return `${seconds}s ago`;
+   430→            const minutes = Math.round(seconds / 60);
+   431→            if(minutes < 60) return `${minutes}m ago`;
+   432→            const hours = Math.round(minutes / 60);
+   433→            if(hours < 24) return `${hours}h ago`;
+   434→            const days = Math.round(hours / 24);
+   435→            if(days < 7) return `${days}d ago`;
+   436→            return date.toLocaleDateString('en-GB');
+   437→        }
+   438→         
+   439→                // --- OPTIMIZED LIGHTWEIGHT BATCH LOADING ENGINE ---
+   440→        let globalBatchesCache = [];
+   441→        const blockedBatchNames = ['arjuna jee 2027.', '']; 
+   442→
+   443→        async function fetchBatches(isNewSearch = false) {
+   444→            let statusEl = document.getElementById('load-status');
+   445→            let btn = document.querySelector('#load-more-container button');
+   446→            
+   447→            if (isNewSearch) {
+   448→                currentPage = 1;
+   449→                document.getElementById('all-batch-grid').innerHTML = '';
+   450→                if(statusEl) statusEl.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Searching...';
+   451→            } else {
+   452→                if(btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+   453→            }
+   454→
+   455→            try {
+   456→                // 1. Fetch both static catalog and custom KV batches simultaneously if cache is empty
+   457→                if (globalBatchesCache.length === 0) {
+   458→                    let mainBatches = [];
+   459→                    let kvBatches = [];
+   460→
+   461→                    try {
+   462→                        let res = await fetch('/data/all_batches.json');
+   463→                        let parsedData = JSON.parse(await res.text());
+   464→                        let rawBatches = Array.isArray(parsedData) ? parsedData : (parsedData.data || []);
+   465→                        mainBatches = rawBatches.map(b => ({
+   466→                            _id: b.id || b._id,
+   467→                            name: b.name,
+   468→                            previewImage: b.imageUrl || b.previewImage
+   469→                        }));
+   470→                    } catch(e) { console.error("Static JSON file fetch failed", e); }
+   471→
+   472→                    try {
+   473→                        let kvRes = await fetch('/api/batches'); // Your backend handles returning KV cache here
+   474→                        let parsedKV = JSON.parse(await kvRes.text());
+   475→                        let rawKV = Array.isArray(parsedKV) ? parsedKV : (parsedKV.data || []);
+   476→                        kvBatches = rawKV.map(b => ({
+   477→                            _id: b.id || b._id,
+   478→                            name: b.name,
+   479→                            previewImage: b.imageUrl || b.previewImage
+   480→                        }));
+   481→                    } catch(e) { console.log("KV additions are empty or uninitialized"); }
+   482→
+   483→                    // Merge databases locally (KV entries take priority)
+   484→                    let uniqueMap = new Map();
+   485→                    [...kvBatches, ...mainBatches].forEach(b => {
+   486→                        if(b && b._id && !uniqueMap.has(b._id)) {
+   487→                            uniqueMap.set(b._id, b);
+   488→                        }
+   489→                    });
+   490→                    globalBatchesCache = Array.from(uniqueMap.values());
+   491→                }
+   492→
+   493→                // 2. High-Speed Local Filter
+   494→                let searchTerm = (currentSearchTerm || '').toLowerCase().trim();
+   495→                let filteredBatches = globalBatchesCache.filter(b => {
+   496→                    let bName = (b.name || '').toLowerCase().trim();
+   497→                    let bId = (b._id || '').toLowerCase();
+   498→                    
+   499→                    if (blockedBatchNames.includes(bName)) return false; 
+   500→                    if (!searchTerm) return true; 
+   501→                    
+   502→                    return bName.includes(searchTerm) || bId === searchTerm;
+   503→                });
+   504→
+   505→                // 3. Local Pagination
+   506→                const limit = 20;
+   507→                const total = filteredBatches.length;
+   508→                const offset = (currentPage - 1) * limit;
+   509→                const paginatedBatches = filteredBatches.slice(offset, offset + limit);
+   510→                
+   511→                // 4. Render
+   512→                if (paginatedBatches.length === 0 && isNewSearch) {
+   513→                    document.getElementById('all-batch-grid').innerHTML = '<div class="col-12 text-center p-5 text-muted"><i class="fas fa-search fa-2x mb-3"></i><br>No batches found.</div>';
+   514→                } else {
+   515→                    paginatedBatches.forEach(b => {
+   516→                        fetchedBatchesMap.set(b._id, b); 
+   517→                        renderSingleBatch(b);
+   518→                    });
+   519→                }
+   520→
+   521→                // 5. Update UI Controls
+   522→                let loadMoreContainer = document.getElementById('load-more-container');
+   523→                if (loadMoreContainer) {
+   524→                    if ((currentPage * limit) >= total) {
+   525→                        loadMoreContainer.style.display = 'none';
+   526→                    } else {
+   527→                        loadMoreContainer.style.display = 'block';
+   528→                        if(btn) btn.innerHTML = '<i class="fas fa-sync-alt me-2"></i> Load More';
+   529→                    }
+   530→                }
+   531→                if(statusEl) statusEl.innerHTML = '';
+   532→
+   533→            } catch(e) {
+   534→                console.error("Search Engine Error:", e);
+   535→                if(statusEl) statusEl.innerHTML = `<i class="fas fa-exclamation-triangle text-danger"></i> Failed`;
+   536→            }
+   537→        }
+   538→
+   539→        function loadNextPage() { currentPage++; fetchBatches(false); }
+   540→
+   541→        function handleSearchInput() {
+   542→            clearTimeout(searchTimeout);
+   543→            currentSearchTerm = document.getElementById('batch-search').value;
+   544→            searchTimeout = setTimeout(() => { fetchBatches(true); }, 500); 
+   545→        }
+   546→        function renderSingleBatch(b) {
+   547→            const grid = document.getElementById('all-batch-grid');
+   548→            
+   549→            // 🛡️ BULLETPROOF IMAGE EXTRACTOR
+   550→            let thumb = "https://store.pw.live/footer-logo.svg";
+   551→            if (b.previewImage) {
+   552→                if (typeof b.previewImage === 'string' && b.previewImage.trim() !== '') {
+   553→                    thumb = b.previewImage;
+   554→                } else if (b.previewImage.baseUrl && b.previewImage.key) {
+   555→                    thumb = b.previewImage.baseUrl + b.previewImage.key;
+   556→                }
+   557→            } else if (b.imageUrl) {
+   558→                thumb = b.imageUrl;
+   559→            }
+   560→
+   561→            let safeName = (b.name || "").replace(/'/g, "\\'");
+   562→            let btnText = enrolledBatches.includes(b._id) ? 'Study' : 'View Details';
+   563→
+   564→            let html = `
+   565→                <div class="col-12 col-md-6 col-lg-4">
+   566→                    <div class="card-custom" onclick="handleEnroll('${b._id}', '${safeName}')">
+   567→                        <img src="${thumb}" class="batch-thumb" loading="lazy">
+   568→                        <div class="card-body-custom">
+   569→                            <div class="title-text mt-2">${b.name}</div>
+   570→                            <button class="btn btn-dark w-100 mt-auto" style="font-weight: 600;">${btnText}</button>
+   571→                        </div>
+   572→                    </div>
+   573→                </div>
+   574→            `;
+   575→            grid.insertAdjacentHTML('beforeend', html);
+   576→        }
+   577→        
+   578→
+   579→
+   580→        // --- BATCH DETAILS MODAL (Vertical Dots) ---
+   581→        async function openBatchInfo() {
+   582→            if(!currentBatch.id) return;
+   583→            const content = document.getElementById('batch-info-content');
+   584→            content.innerHTML = '<div class="loader-center" style="padding: 100px 0;"><i class="fas fa-spinner fa-spin"></i> Fetching Details...</div>';
+   585→            document.getElementById('batch-info-modal').classList.add('active');
+   586→
+   587→                        try {
+   588→                // 🎯 DIRECT DEEP FETCH VIA CORE ENGINE
+   589→                let res = await ParchamCore('pw_btch_dtl', { batchId: currentBatch.id });
+   590→                let b = res?.data || res;
+   591→
+   592→                if(!b || !b.name) {
+   593→                    content.innerHTML = '<p class="text-center text-muted p-5">Batch details not available.</p>';
+   594→                    return;
+   595→                }
+   596→
+   597→                // 🛡️ BULLETPROOF IMAGE EXTRACTOR
+   598→                let thumb = "https://store.pw.live/footer-logo.svg";
+   599→                if (b.previewImage && typeof b.previewImage === 'string') thumb = b.previewImage;
+   600→                else if (b.previewImage && b.previewImage.baseUrl && b.previewImage.key) thumb = b.previewImage.baseUrl + b.previewImage.key;
+   601→
+   602→                let priceText = (b.price === 0) ? 'Free' : `free----`;
+   603→                if (b.discount > 0 && b.price > 0) priceText = `<del class="text-muted" style="font-size:0.8rem;">竄ｹ${b.price + b.discount}</del> 竄ｹ${b.price}`;
+   604→
+   605→                let sDate = b.startDate ? new Date(b.startDate).toLocaleDateString('en-GB', {day:'numeric', month:'short', year:'numeric'}) : 'TBA';
+   606→                let eDate = b.endDate ? new Date(b.endDate).toLocaleDateString('en-GB', {day:'numeric', month:'short', year:'numeric'}) : 'TBA';
+   607→                let validity = b.validity || 'Till Exams';
+   608→
+   609→                let teachersMap = new Map();
+   610→                if(b.subjects && b.subjects.length > 0) {
+   611→                    b.subjects.forEach(sub => {
+   612→                        if(sub.teacherIds && sub.teacherIds.length > 0) {
+   613→                            sub.teacherIds.forEach(t => {
+   614→                                if(!teachersMap.has(t._id)) {
+   615→                                    t.displaySubject = t.subject || sub.subject;
+   616→                                    teachersMap.set(t._id, t);
+   617→                                }
+   618→                            });
+   619→                        }
+   620→                    });
+   621→                }
+   622→                
+   623→                let teachersData = Array.from(teachersMap.values());
+   624→                let teachersHtml = '';
+   625→                
+   626→                if(teachersData.length > 0) {
+   627→                    teachersHtml = '<h6 class="fw-bold mt-4 mb-3" style="font-size: 1.1rem;">Know Your Teachers</h6><div class="teacher-scroll">';
+   628→                    
+   629→                    teachersData.forEach(t => {
+   630→                        let tImg = (t.imageId && t.imageId.baseUrl && t.imageId.key) ? (t.imageId.baseUrl + t.imageId.key) : 'https://ui-avatars.com/api/?name='+encodeURIComponent(t.firstName+' '+(t.lastName||''))+'&background=random';
+   631→                        let fullName = `${t.firstName || ''} ${t.lastName || ''}`.trim();
+   632→                        let expText = t.experience ? `${t.experience} Yrs Exp` : '';
+   633→                        
+   634→                        teachersHtml += `
+   635→                            <div class="teacher-card">
+   636→                                <img src="${tImg}" class="teacher-img">
+   637→                                <div class="fw-bold text-dark text-truncate w-100" style="font-size: 0.85rem;">${fullName}</div>
+   638→                                <div class="text-muted text-truncate w-100" style="font-size: 0.7rem; margin-top:2px;">${t.displaySubject}</div>
+   639→                                <div class="text-muted" style="font-size: 0.7rem;">${expText}</div>
+   640→                                <button class="btn btn-sm btn-outline-primary mt-3" style="font-size: 0.7rem; border-radius: 20px; width: 100%; font-weight:700;" onclick="openTeacherModal('${t._id}')">View Details</button>
+   641→                            </div>
+   642→                        `;
+   643→                    });
+   644→                    teachersHtml += '</div>';
+   645→                }
+   646→
+   647→                let desc = b.description || b.shortDescription || 'No description available for this batch.';
+   648→
+   649→                content.innerHTML = `
+   650→                    <div style="background: url('${thumb}') center/cover; height: 200px; width: 100%; border-radius: 20px 20px 0 0; position: relative;">
+   651→                        <div style="position:absolute; bottom:0; left:0; width:100%; height:50%; background: linear-gradient(to top, rgba(0,0,0,0.8), transparent);"></div>
+   652→                        <div class="badge bg-danger position-absolute top-0 end-0 m-3 fs-6">${priceText}</div>
+   653→                    </div>
+   654→                    <div class="p-4 pt-3">
+   655→                        <h4 class="fw-bold mb-3">${b.name}</h4>
+   656→                        <div class="batch-grid-info">
+   657→                            <div class="bg-info-box"><span class="lbl">Class</span><span class="val">${b.class?.name || 'General'}</span></div>
+   658→                            <div class="bg-info-box"><span class="lbl">Validity</span><span class="val">${validity}</span></div>
+   659→                            <div class="bg-info-box"><span class="lbl">Start Date</span><span class="val">${sDate}</span></div>
+   660→                            <div class="bg-info-box"><span class="lbl">End Date</span><span class="val">${eDate}</span></div>
+   661→                        </div>
+   662→                        
+   663→                        ${teachersHtml}
+   664→
+   665→                                                <h6 class="fw-bold mt-4 mb-2">About Batch</h6>
+   666→                        <div class="batch-desc-text">${desc}</div>
+   667→                        
+   668→                        <button class="btn btn-outline-danger w-100 mt-4 fw-bold rounded-pill" onclick="unenrollBatch('${b._id}')">
+   669→                            <i class="fas fa-sign-out-alt me-2"></i> Unenroll from Batch
+   670→                        </button>
+   671→                    </div>
+   672→                `;
+   673→
+   674→
+   675→            } catch(e) {
+   676→                console.error(e);
+   677→                content.innerHTML = '<p class="text-center text-danger mt-4">Failed to load batch details.</p>';
+   678→            }
+   679→        }
+   680→
+   681→        async function openTeacherModal(teacherId) {
+   682→            const modal = document.getElementById('teacher-details-modal');
+   683→            const content = document.getElementById('teacher-details-content');
+   684→            
+   685→            content.innerHTML = '<div class="loader-center" style="padding: 100px 0;"><i class="fas fa-spinner fa-spin"></i> Loading Profile...</div>';
+   686→            modal.classList.add('active');
+   687→
+   688→                        try {
+   689→                let data = await ParchamCore('pw_tchr_dtl', { batchId: currentBatch.id, teacherId: teacherId });
+   690→
+   691→                if(data && data.success && data.data) {
+   692→
+   693→                 let t = data.data;
+   694→                    let name = `${t.firstName || ''} ${t.lastName || ''}`.trim();
+   695→                    let img = (t.imageId && t.imageId.baseUrl && t.imageId.key) ? (t.imageId.baseUrl + t.imageId.key) : 'https://ui-avatars.com/api/?name='+encodeURIComponent(name)+'&background=random';
+   696→                    
+   697→                    let coverHtml = '';
+   698→                    if(t.introductionVideoId && t.introductionVideoId.key) {
+   699→                        let vidUrl = (t.introductionVideoId.baseUrl || 'https://static.pw.live/') + t.introductionVideoId.key;
+   700→                        let thumbUrl = (t.introVideoThumbnail && t.introVideoThumbnail.baseUrl && t.introVideoThumbnail.key) ? (t.introVideoThumbnail.baseUrl + t.introVideoThumbnail.key) : img;
+   701→                        
+   702→                        coverHtml = `
+   703→                            <div style="width: 100%; height: 220px; background: #000; position: relative;">
+   704→                                <video style="width: 100%; height: 100%; object-fit: cover;" controls poster="${thumbUrl}">
+   705→                                    <source src="${vidUrl}" type="video/mp4">
+   706→                                </video>
+   707→                            </div>
+   708→                        `;
+   709→                    } else {
+   710→                        coverHtml = `
+   711→                            <div style="width: 100%; height: 120px; background: linear-gradient(135deg, var(--primary), #818cf8); position: relative;"></div>
+   712→                        `;
+   713→                    }
+   714→
+   715→                    let quoteHtml = '';
+   716→                    if(t.featuredLine) {
+   717→                        quoteHtml = `<div style="font-style: italic; color: #4b5563; font-weight: 600; margin-top: 10px; border-left: 3px solid var(--primary); padding-left: 10px;">"${t.featuredLine}"</div>`;
+   718→                    }
+   719→
+   720→                    let tagsHtml = '';
+   721→                    if(t.tags && t.tags.length > 0) {
+   722→                        t.tags.forEach(tag => {
+   723→                            let cleanTag = tag.replace(/"/g, '');
+   724→                            tagsHtml += `<span style="background: #fef3c7; color: #d97706; border: 1px solid #fde68a; font-size: 0.7rem; font-weight: 700; padding: 4px 10px; border-radius: 20px; display: inline-block; margin-right: 8px; margin-bottom: 8px;">${cleanTag}</span>`;
+   725→                        });
+   726→                    }
+   727→
+   728→                    let aboutHtml = t.about || '<p class="text-muted">No description provided.</p>';
+   729→                    let expText = t.experience ? `${t.experience} Yrs Exp` : 'Faculty';
+   730→                    let qualText = t.qualification ? ` &bull; ${t.qualification}` : '';
+   731→
+   732→                    content.innerHTML = `
+   733→                        ${coverHtml}
+   734→                        <div style="padding: 0 20px 20px 20px; position: relative; margin-top: -45px; max-height: 60vh; overflow-y: auto;">
+   735→                            <img src="${img}" style="width: 90px; height: 90px; border-radius: 50%; object-fit: cover; border: 4px solid #fff; background: #fff; box-shadow: 0 4px 6px rgba(0,0,0,0.1); position: relative; z-index: 10;">
+   736→                            
+   737→                            <div class="mt-2">
+   738→                                <h4 class="fw-bold m-0 text-dark" style="font-size: 1.3rem;">${name}</h4>
+   739→                                <div style="font-weight: 700; color: var(--primary); font-size: 0.95rem; margin-top: 4px;">${t.subject || 'Subject Expert'}</div>
+   740→                                <div style="font-size: 0.85rem; color: var(--text-muted); font-weight: 600; margin-top: 4px;">
+   741→                                    <i class="fas fa-briefcase"></i> ${expText}${qualText}
+   742→                                </div>
+   743→                                ${quoteHtml}
+   744→                            </div>
+   745→                            
+   746→                            <div class="mt-3">${tagsHtml}</div>
+   747→                            
+   748→                            <hr style="border-color: var(--border-color); margin: 20px 0;">
+   749→                            
+   750→                            <h6 class="fw-bold mb-3" style="font-size: 1.1rem;">About</h6>
+   751→                            <div style="font-size:0.95rem; color: var(--text-dark); line-height: 1.6; word-wrap: break-word;">${aboutHtml}</div>
+   752→                        </div>
+   753→                    `;
+   754→                } else {
+   755→                    content.innerHTML = '<div style="padding: 40px 20px;"><p class="text-center text-muted">Teacher details not available.</p></div>';
+   756→                }
+   757→            } catch(e) {
+   758→                console.error("Teacher details load failed", e);
+   759→                content.innerHTML = '<div style="padding: 40px 20px;"><p class="text-center text-danger">Failed to load teacher bio.</p></div>';
+   760→            }
+   761→        }
+   762→
+   763→        // --- Core UI Navigation ---
+   764→        function toggleMenu() {
+   765→            document.getElementById('sidebar').classList.toggle('active');
+   766→            document.getElementById('sidebar-overlay').classList.toggle('active');
+   767→        }
+   768→
+   769→        function nav(viewId) {
+   770→            document.querySelectorAll('.view-section').forEach(el => el.classList.remove('active-view'));
+   771→            if(document.getElementById(viewId)) {
+   772→                document.getElementById(viewId).classList.add('active-view');
+   773→            } else {
+   774→                document.getElementById('home-view').classList.add('active-view');
+   775→                viewId = 'home-view';
+   776→            }
+   777→            
+   778→                // Remove 'active' class from all sidebar links safely
+   779→    document.querySelectorAll('.sidebar-links a').forEach(a => {
+   780→        if (a) a.classList.remove('active');
+   781→    });
+   782→
+   783→    // Add 'active' class to the correct link safely using optional checks
+   784→    if (viewId === 'study-view') {
+   785→        const linkStudy = document.getElementById('link-study');
+   786→        if (linkStudy) linkStudy.classList.add('active');
+   787→    } else if (viewId === 'home-view') {
+   788→        const linkCourses = document.getElementById('link-courses');
+   789→        if (linkCourses) linkCourses.classList.add('active');
+   790→    } else if (viewId === 'settings-view') {
+   791→        const linkSettings = document.getElementById('link-settings');
+   792→        if (linkSettings) linkSettings.classList.add('active');
+   793→  } else if (viewId === 'contact-view') {
+   794→        const linkContact = document.getElementById('link-contact');
+   795→        if (linkContact) linkContact.classList.add('active');
+   796→          
+   797→    }
+   798→
+   799→           document.getElementById('sidebar').classList.remove('active');
+   800→            document.getElementById('sidebar-overlay').classList.remove('active');
+   801→            window.scrollTo(0,0);
+   802→        } 
+   803→
+   804→        function closeModal(id) { document.getElementById(id).classList.remove('active'); }
+   805→        function closeModalOnOutsideClick(e, id) { if(e.target.id === id) closeModal(id); }
+   806→
+   807→        function handleEnroll(id, name) {
+   808→            if(!enrolledBatches.includes(id)) {
+   809→                enrolledBatches.push(id);
+   810→                localStorage.setItem('pw_enrolled_batches', JSON.stringify(enrolledBatches));
+   811→            }
+   812→            currentBatch = { id, name };
+   813→            nav('study-view');
+   814→            initStudyDashboard().then(() => {
+   815→                switchEnrolledBatch(id);
+   816→            });
+   817→        }
+   818→
+   819→                async function initStudyDashboard() {
+   820→            const select = document.getElementById('enrolled-batch-select');
+   821→            select.innerHTML = "";
+   822→            
+   823→            for(let id of enrolledBatches) {
+   824→                let b = fetchedBatchesMap.get(id);
+   825→                if(!b) { 
+   826→                    try {
+   827→                        // 🎯 DIRECT FETCH VIA CORE ENGINE
+   828→                        let res = await ParchamCore('pw_btch_dtl', { batchId: id });
+   829→                        if(res && res.data) { b = res.data; fetchedBatchesMap.set(id, b); }
+   830→                    } catch(e) { console.error("Dropdown Init Failed", e); }
+   831→                }
+   832→
+   833→
+   834→                if(b) {
+   835→                    let option = document.createElement('option');
+   836→                    option.value = b._id; option.text = b.name;
+   837→                    if(currentBatch.id === b._id) option.selected = true;
+   838→                    select.appendChild(option);
+   839→                }
+   840→            }
+   841→            
+   842→            if(enrolledBatches.length > 0 && !currentBatch.id) {
+   843→                switchEnrolledBatch(enrolledBatches[0]); 
+   844→            }
+   845→        }
+   846→
+   847→                      
+   848→                    
+   849→                 // --- UNENROLL ENGINE ---
+   850→        function unenrollBatch(batchId) {
+   851→            if(confirm("Are you sure you want to unenroll from this batch?")) {
+   852→                // 1. Remove from the local array
+   853→                enrolledBatches = enrolledBatches.filter(id => id !== batchId);
+   854→                
+   855→                // 2. Save the updated list to LocalStorage
+   856→                localStorage.setItem('pw_enrolled_batches', JSON.stringify(enrolledBatches));
+   857→                
+   858→                // 3. Close the modal
+   859→                closeModal('batch-info-modal');
+   860→
+   861→                // 4. Remove notification tag so they stop getting alerts for this batch
+   862→                if (typeof window.OneSignalDeferred !== 'undefined') {
+   863→                    window.OneSignalDeferred.push(function(OneSignal) {
+   864→                        OneSignal.User.removeTags([batchId]);
+   865→                    });
+   866→                }
+   867→
+   868→                // 5. Handle UI Updates based on remaining batches
+   869→                if(currentBatch.id === batchId) {
+   870→                    if(enrolledBatches.length > 0) {
+   871→                        // Switch to the next available batch in their list
+   872→                        initStudyDashboard().then(() => {
+   873→                            switchEnrolledBatch(enrolledBatches[0]);
+   874→                        });
+   875→                    } else {
+   876→                        // If they unenrolled from their ONLY batch, reset everything and kick them to Home
+   877→                        currentBatch = { id: null, name: null, cohortId: null, channelId: null, facultyChannelId: null };
+   878→                        document.getElementById('enrolled-batch-select').innerHTML = "";
+   879→                        document.getElementById('live-classes-scroll').innerHTML = "";
+   880→                        nav('home-view');
+   881→                    }
+   882→                } else {
+   883→                    // They unenrolled from a background batch, just refresh the dropdown
+   884→                    initStudyDashboard();
+   885→                }
+   886→
+   887→                // 6. Refresh the home screen so the button changes back to "View Details"
+   888→                if(document.getElementById('home-view').classList.contains('active-view')) {
+   889→                    fetchBatches(true);
+   890→                }
+   891→            }
+   892→        }
+   893→
+   894→                async function switchEnrolledBatch(id) {
+   895→            
+   896→    let b = fetchedBatchesMap.get(id);
+   897→    if(!b) {
+   898→        try {
+   899→            // 🎯 DIRECT FETCH VIA CORE ENGINE
+   900→            let res = await ParchamCore('pw_btch_dtl', { batchId: id });
+   901→            if(res && res.data) { b = res.data; fetchedBatchesMap.set(id, b); }
+   902→        } catch(e) { console.error("Dashboard Sync Failed", e); }
+   903→    }
+   904→
+   905→    if(b) {
+   906→        currentBatch = { id: b._id, name: b.name, cohortId: b.cohortId };
+   907→        
+   908→        let bDetails = await ParchamCore('pw_btch_dtl', { batchId: currentBatch.id });
+   909→
+   910→        if(bDetails && bDetails.data) {
+   911→            currentBatch.channelId = bDetails.data.channelId;
+   912→            currentBatch.facultyChannelId = bDetails.data.facultyChannelId;
+   913→        }
+   914→
+   915→        document.getElementById('enrolled-batch-select').value = id;
+   916→        
+   917→        // ADDED SAFETY CHECK HERE
+   918→        let notifSelect = document.getElementById('notif-batch-select');
+   919→        if (notifSelect) {
+   920→            notifSelect.innerHTML = `<option>${b.name}</option>`;
+   921→        }
+   922→        
+   923→        // These will now execute properly
+   924→        loadLiveClasses();
+   925→        fetchNotifications();
+   926→        
+   927→    } 
+   928→} 
+   929→
+   930→
+   931→        
+   932→
+   933→        
+   934→
+   935→
+   936→        
+   937→        async function loadLiveClasses() {
+   938→            const container = document.getElementById('live-classes-container');
+   939→            const scrollBox = document.getElementById('live-classes-scroll');
+   940→            container.style.display = 'block';
+   941→            scrollBox.innerHTML = "<div class='loader-center w-100'><i class='fas fa-spinner fa-spin'></i></div>";
+   942→
+   943→            const data = await ParchamCore('pw_tdy_sch', { batchId: currentBatch.id });
+   944→
+   945→            scrollBox.innerHTML = "";
+   946→            let hasValidEvents = false;
+   947→
+   948→            if(data && data.data && Array.isArray(data.data)) {
+   949→                const now = new Date();
+   950→                data.data.forEach(item => {
+   951→                    if(item.type !== 'LECTURE' || !item.data) return;
+   952→                    let d = item.data;
+   953→                    let startTimeObj = new Date(d.startTime);
+   954→                    let endTimeObj = new Date(d.endTime);
+   955→                    let isDone = (endTimeObj < now) && (d.status !== 'LIVE');
+   956→                    if(isDone) return; 
+   957→
+   958→                    hasValidEvents = true;
+   959→                    let thumbId = `thumb-${d._id}`;
+   960→                    let thumb = item.data?.videoDetails?.image || item.videoDetails?.image || "https://pw.studyparcham.qzz.io/logo.png";
+   961→
+   962→                    let time = d.startTime ? startTimeObj.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+   963→                    let isLiveNow = d.status === 'LIVE' || (startTimeObj <= now && endTimeObj >= now);
+   964→                    let tag = isLiveNow ? '<span class="live-tag">🔴LIVE NOW</span>' : '<span class="upcoming-tag">🔔UPCOMING</span>';
+   965→                    
+   966→                    let targetPage = `live.html?videoId=${d._id}&batchId=${currentBatch.id}&subjectId=${d.subjectId?._id}`;
+   967→
+   968→                    let joinBtnHtml = '';
+   969→                    if(isLiveNow) {
+   970→                        joinBtnHtml = `<button class="btn btn-sm btn-danger" onclick="window.open('${targetPage}', '_blank')"><i class="fas fa-play"></i> Join</button>`;
+   971→                    } else if (startTimeObj > now) {
+   972→                        joinBtnHtml = `<span style="font-size:0.75rem; font-weight:700; color:var(--text-muted); border: 1px solid var(--border-color); padding: 4px 8px; border-radius: 4px;">Scheduled</span>`;
+   973→                    }
+   974→
+   975→                    let attachBtn = '';
+   976→                    if ((d.homeworkIds && d.homeworkIds.length > 0) || (d.exerciseIds && d.exerciseIds.length > 0)) {
+   977→                        fetchedBatchesMap.set(`node_${d._id}`, d); 
+   978→                        attachBtn = `<button class="btn btn-sm btn-outline-secondary ms-2" onclick="openNotesModal('${d._id}')">Notes</button>`;
+   979→                    }
+   980→
+   981→                    scrollBox.innerHTML += `
+   982→                        <div class="live-card-vertical">
+   983→                            <img src="${thumb}" id="${thumbId}" class="live-thumb-sm">
+   984→                            <div class="flex-grow-1">
+   985→                                ${tag}
+   986→                                <div style="font-weight: 700; font-size: 0.95rem; line-height: 1.2; margin-bottom: 5px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;">${d.topic || d.name}</div>
+   987→                                <div class="d-flex justify-content-between align-items-center mt-2">
+   988→                                    <div style="font-size: 0.8rem; font-weight:600; color: var(--text-muted);"><i class="far fa-clock"></i> ${time}</div>
+   989→                                    <div class="d-flex align-items-center">
+   990→                                        ${joinBtnHtml}
+   991→                                        ${attachBtn}
+   992→                                    </div>
+   993→                                </div>
+   994→                            </div>
+   995→                        </div>
+   996→                    `;
+   997→
+   998→                    // Smart Extractor: If generic thumbnail but teacher exists, fetch teacher pic via Proxy
+   999→                    if (thumb.includes('logo.png') && d.teachers && d.teachers.length > 0) {
+  1000→                        extractTeacherThumbnail(currentBatch.id, d.teachers[0], thumbId);
+  1001→                    }
+  1002→                });
+  1003→            }
+  1004→            if(!hasValidEvents) {
+  1005→                scrollBox.innerHTML = `
+  1006→                    <div class="text-center py-4">
+  1007→                        <i class="fas fa-calendar-times" style="font-size: 3rem; color: var(--text-muted); opacity: 0.5; margin-bottom: 10px;"></i>
+  1008→                        <h6 style="font-weight: 700;">No upcoming events,</h6>
+  1009→                        <p class="text-muted" style="font-size: 0.85rem;">Perfect time to catch up on pending work!</p>
+  1010→                    </div>
+  1011→                `;
+  1012→            }
+  1013→        }
+  1014→
+  1015→        async function extractTeacherThumbnail(batchId, teacherId, imgElementId) {
+  1016→            let res = await ParchamCore('pw_tchr_dtl', { batchId: currentBatch.id, teacherId: teacherId });
+  1017→
+  1018→            if (res && res.data && res.data.imageId) {
+  1019→                let imgUrl = (res.data.imageId.baseUrl || "https://static.pw.live/") + res.data.imageId.key;
+  1020→                let imgEl = document.getElementById(imgElementId);
+  1021→                if (imgEl) imgEl.src = imgUrl;
+  1022→            }
+  1023→        }
+  1024→
+  1025→        
+  1026→
+  1027→        
+  1028→
+  1029→        
+  1030→
+  1031→                    
+  1032→
+  1033→        async function openAllClasses() {
+  1034→            nav('all-classes-view');
+  1035→            switchClassesTab('subjects');
+  1036→        }
+  1037→
+  1038→        async function switchClassesTab(tab) {
+  1039→            document.getElementById('tab-subjects').classList.remove('active');
+  1040→            document.getElementById('tab-resources').classList.remove('active');
+  1041→            document.getElementById('subjects-grid').style.display = 'none';
+  1042→            document.getElementById('resources-grid').style.display = 'none';
+  1043→            if(tab === 'subjects') {
+  1044→                document.getElementById('tab-subjects').classList.add('active');
+  1045→                document.getElementById('subjects-grid').style.display = 'flex';
+  1046→                loadSubjects();
+  1047→            } else {
+  1048→                document.getElementById('tab-resources').classList.add('active');
+  1049→                document.getElementById('resources-grid').style.display = 'block';
+  1050→                loadResources();
+  1051→            }
+  1052→        }
+  1053→
+  1054→        async function loadSubjects() {
+  1055→            const grid = document.getElementById('subjects-grid');
+  1056→            grid.innerHTML = "<div class='loader-center w-100'><i class='fas fa-spinner fa-spin'></i></div>";
+  1057→            const data = await ParchamCore('pw_btch_dtl', { batchId: currentBatch.id });
+  1058→
+  1059→            grid.innerHTML = "";
+  1060→            if(data && data.data && data.data.subjects) {
+  1061→                data.data.subjects.forEach(sub => {
+  1062→                    const internalId = sub.subjectId || sub._id;
+  1063→                    grid.innerHTML += `
+  1064→                        <div class="col-12 col-md-6">
+  1065→                            <div class="list-card" onclick="openSubject('${sub._id}', '${internalId}', '${sub.subject.replace(/'/g, "\\'")}')">
+  1066→                                <div class="sub-icon-letter">${sub.subject.substring(0,2).toUpperCase()}</div>
+  1067→                                <div style="flex-grow:1; font-weight: 700; font-size: 1.05rem;">${sub.subject}</div>
+  1068→                                <i class="fas fa-chevron-right text-muted"></i>
+  1069→                            </div>
+  1070→                        </div>
+  1071→                    `;
+  1072→                });
+  1073→            } else { grid.innerHTML = "<p class='text-muted text-center w-100'>No subjects mapped.</p>"; }
+  1074→        }
+  1075→        
+  1076→        // --- NOTIFICATIONS SYSTEM ---
+  1077→        function toggleNotifications() {
+  1078→            document.getElementById('notif-panel').classList.toggle('active');
+  1079→            document.getElementById('notif-overlay').classList.toggle('active');
+  1080→        }
+  1081→
+  1082→       
+  1083→                                                    
+  1084→        let notifCurrentPage = 1;
+  1085→        let notifIsLoading = false;
+  1086→
+  1087→        async function fetchNotifications(isNew = true) {
+  1088→            if(!currentBatch.id || notifIsLoading) return;
+  1089→            notifIsLoading = true;
+  1090→            
+  1091→            const listToday = document.getElementById('notif-list-today');
+  1092→            const listOlder = document.getElementById('notif-list-older');
+  1093→            const contentArea = document.getElementById('notif-content-area');
+  1094→            
+  1095→            if (isNew) {
+  1096→                notifCurrentPage = 1;
+  1097→                notificationsData = [];
+  1098→                listToday.innerHTML = "<div class='text-center p-4'><i class='fas fa-spinner fa-spin fs-4 text-primary'></i></div>";
+  1099→                listOlder.innerHTML = "";
+  1100→                let oldBtn = document.getElementById('notif-load-more-btn');
+  1101→                if (oldBtn) oldBtn.remove();
+  1102→            } else {
+  1103→                let btn = document.getElementById('notif-load-more-btn');
+  1104→                if(btn) btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+  1105→            }
+  1106→
+  1107→            try {
+  1108→                let data = await ParchamCore('pw_notifs', { batchId: currentBatch.id, page: notifCurrentPage, limit: 20 });
+  1109→
+  1110→                if (isNew) listToday.innerHTML = "";
+  1111→
+  1112→                if (data && data.data && data.data.length > 0) {
+  1113→                    const now = new Date();
+  1114→                    const todayDateStr = now.toISOString().split('T')[0];
+  1115→
+  1116→                    data.data.forEach(n => {
+  1117→                        notificationsData.push(n);
+  1118→                        let dateObj = new Date(n.scheduleTime);
+  1119→                        let isToday = dateObj.toISOString().startsWith(todayDateStr);
+  1120→                        let iconHtml = '';
+  1121→                        
+  1122→                        if(n.type === 'LECTURE') iconHtml = `<div class="notif-icon-box bg-primary-subtle text-primary"><i class="fas fa-play-circle"></i></div>`;
+  1123→                        else if(n.type === 'DPP' || n.type === 'GENERAL') iconHtml = `<div class="notif-icon-box" style="background:#ffedd5; color:#ea580c;"><i class="fas fa-bullhorn"></i></div>`;
+  1124→                        else if(n.type === 'TEST') iconHtml = `<div class="notif-icon-box" style="background:#fef3c7; color:#d97706;"><i class="fas fa-clipboard-list"></i></div>`;
+  1125→                        else if(n.type === 'DISCOUNT_OFFERS') iconHtml = `<div class="notif-icon-box bg-success-subtle text-success"><i class="fas fa-percent"></i></div>`;
+  1126→                        else iconHtml = `<div class="notif-icon-box bg-secondary-subtle text-secondary"><i class="fas fa-bell"></i></div>`;
+  1127→
+  1128→                        let dot = n.isRead ? '' : '<span class="notif-dot"></span>';
+  1129→                        let timeText = isToday ? calculateTimeAgo(dateObj, now) : dateObj.toLocaleDateString('en-GB', {day: '2-digit', month: 'short'});
+  1130→
+  1131→                        let html = `
+  1132→                            <li class="notif-item" onclick="openNotifPopup('${n._id}')">
+  1133→                                ${iconHtml}
+  1134→                                <div class="flex-grow-1">
+  1135→                                    <div class="notif-title">${dot}${n.heading}</div>
+  1136→                                    <div class="notif-desc">${n.announcement}</div>
+  1137→                                </div>
+  1138→                                <div class="notif-time">${timeText}</div>
+  1139→                            </li>
+  1140→                        `;
+  1141→                        if(isToday) listToday.innerHTML += html;
+  1142→                        else listOlder.innerHTML += html;
+  1143→                    });
+  1144→
+  1145→                    notifCurrentPage++;
+  1146→                    
+  1147→                    let btn = document.getElementById('notif-load-more-btn');
+  1148→                    if (!btn) {
+  1149→                        contentArea.insertAdjacentHTML('beforeend', `<button id="notif-load-more-btn" class="btn btn-sm btn-outline-secondary w-100 my-3 fw-bold" onclick="fetchNotifications(false)">Load More Notifications</button>`);
+  1150→                    } else {
+  1151→                        btn.innerHTML = 'Load More Notifications';
+  1152→                    }
+  1153→                } else {
+  1154→                    if (isNew) listToday.innerHTML = "<p class='text-muted text-center p-3'>No notifications yet.</p>";
+  1155→                    let btn = document.getElementById('notif-load-more-btn');
+  1156→                    if (btn) btn.remove();
+  1157→                }
+  1158→            } catch(e) {
+  1159→                console.error("Failed to fetch announcements:", e);
+  1160→                if (isNew) listToday.innerHTML = "<p class='text-danger text-center p-3'>Failed to load notifications.</p>";
+  1161→            }
+  1162→            notifIsLoading = false;
+  1163→        }
+  1164→
+  1165→
+  1166→        function calculateTimeAgo(date, now) {
+  1167→            const diffMs = now - date;
+  1168→            const diffHrs = Math.floor(diffMs / (1000 * 60 * 60));
+  1169→            if(diffHrs <= 0) return 'Just now';
+  1170→            return `${diffHrs}h`;
+  1171→        }
+  1172→
+  1173→        function openNotifPopup(id) {
+  1174→            const notif = notificationsData.find(n => n._id === id);
+  1175→            if(!notif) return;
+  1176→            document.getElementById('popup-title').innerText = notif.heading;
+  1177→            document.getElementById('popup-desc').innerText = notif.announcement;
+  1178→            const imgEl = document.getElementById('popup-image');
+  1179→            if(notif.attachment && notif.attachment.baseUrl && notif.attachment.key) {
+  1180→                imgEl.src = notif.attachment.baseUrl + notif.attachment.key;
+  1181→                imgEl.style.display = 'block';
+  1182→            } else {
+  1183→                imgEl.style.display = 'none';
+  1184→            }
+  1185→            document.getElementById('notif-detail-modal').classList.add('active');
+  1186→        }
+  1187→
+  1188→        function closeNotifPopup() { document.getElementById('notif-detail-modal').classList.remove('active'); }
+  1189→        function markAllRead() { document.querySelectorAll('.notif-dot').forEach(dot => dot.remove()); }
+  1190→
+  1191→
+  1192→                  async function loadResources() {
+  1193→            const grid = document.getElementById('resources-grid');
+  1194→            grid.innerHTML = "<div class='loader-center w-100'><i class='fas fa-spinner fa-spin'></i></div>";
+  1195→            
+  1196→            try {
+  1197→                // 1. Fetch subjects to build the massive ID string
+  1198→                const bDetails = await ParchamCore('pw_btch_dtl', { batchId: currentBatch.id });
+  1199→
+  1200→                let sIds = "";
+  1201→                if (bDetails && bDetails.data && bDetails.data.subjects) {
+  1202→                    sIds = bDetails.data.subjects.map(s => s._id).join(',');
+  1203→                }
+  1204→
+  1205→                // 2. 🎯 STRICT ENDPOINT FIX: Using the dedicated Resource Action
+  1206→                const data = await ParchamCore('pw_res_topics', { 
+  1207→                    batchId: currentBatch.id, 
+  1208→                    subjectIds: sIds
+  1209→                });
+  1210→
+  1211→                let topics = (data?.data?.data) || (data?.data) || [];
+  1212→                grid.innerHTML = "";
+  1213→                
+  1214→                if(topics.length > 0) {
+  1215→                    topics.forEach(t => {
+  1216→                        let typeIdForResource = t.typeId || ''; 
+  1217→                        grid.innerHTML += `
+  1218→                            <div class="list-card" onclick="openResourceTopic('${t._id}', '${t.name.replace(/'/g, "\\'")}', '${typeIdForResource}')">
+  1219→                                <div class="sub-icon-letter" style="background:#fefce8; color:#d97706;"><i class="fas fa-folder"></i></div>
+  1220→                                <div style="flex-grow:1;">
+  1221→                                    <div style="font-weight: 700; font-size: 1rem;">${t.name}</div>
+  1222→                                    <div style="font-size: 0.8rem; color: var(--text-muted); margin-top: 2px;">${t.notes || 0} Notes &bull; ${t.videos || 0} Videos</div>
+  1223→                                </div>
+  1224→                                <i class="fas fa-chevron-right text-muted"></i>
+  1225→                            </div>
+  1226→                        `;
+  1227→                    });
+  1228→                } else { 
+  1229→                    grid.innerHTML = "<p class='text-muted text-center p-4'>No resources found.</p>"; 
+  1230→                }
+  1231→            } catch(e) {
+  1232→                console.error("Resources Load Error:", e);
+  1233→                grid.innerHTML = "<p class='text-danger text-center p-4'>Failed to load resources.</p>"; 
+  1234→            }
+  1235→                  }
+  1236→
+  1237→
+  1238→
+  1239→        function openResourceTopic(tagId, name, typeId) {
+  1240→            currentSubject = { id: typeId, internalId: typeId, name: "Resources" };
+  1241→            openTopic(tagId, name);
+  1242→        }
+  1243→
+  1244→        function openSubject(id, internalId, name) {
+  1245→            currentSubject = { id, internalId, name };
+  1246→            document.getElementById('nav-subject-name').innerText = name;
+  1247→            nav('chapters-view');
+  1248→            loadChapters('UNITS', document.getElementById('tab-ch-chapters'));
+  1249→        }
+  1250→
+  1251→        async function loadChapters(tagType, el) {
+  1252→            document.getElementById('tab-ch-chapters').classList.remove('active');
+  1253→            document.getElementById('tab-ch-study').classList.remove('active');
+  1254→            el.classList.add('active');
+  1255→            const list = document.getElementById('chapters-list');
+  1256→            list.innerHTML = "<div class='loader-center w-100'><i class='fas fa-spinner fa-spin'></i></div>";
+  1257→            const data = await ParchamCore('pw_sub_topics', { batchId: currentBatch.id, subjectId: currentSubject.id, page: 1, tagType: tagType, limit: 50 });
+  1258→
+  1259→            let topics = (data?.data?.data) || (data?.data) || [];
+  1260→            list.innerHTML = "";
+  1261→            if(topics.length > 0) {
+  1262→                topics.forEach((t, i) => {
+  1263→                    let code = i < 9 ? `0${i+1}` : i+1;
+  1264→                    let tagPre = tagType === 'UNITS' ? 'CH' : 'SM';
+  1265→                    list.innerHTML += `
+  1266→                        <div class="list-card" onclick="openTopic('${t._id}', '${t.name.replace(/'/g, "\\'")}')">
+  1267→                            <div style="flex-grow:1;">
+  1268→                                <span style="background: var(--primary-light); color: var(--primary); font-size: 0.75rem; font-weight: 800; padding: 3px 8px; border-radius: 4px;">${tagPre} - ${code}</span>
+  1269→                                <div style="font-weight: 700; font-size: 1.05rem; margin-top: 8px;">${t.name}</div>
+  1270→                            </div>
+  1271→                            <i class="fas fa-chevron-right text-muted ms-3"></i>
+  1272→                        </div>
+  1273→                    `;
+  1274→                });
+  1275→            } else { list.innerHTML = "<p class='text-muted text-center p-4'>Directory empty.</p>"; }
+  1276→        }
+  1277→
+  1278→        async function openTopic(id, name) {
+  1279→            currentTopic = { id, name };
+  1280→            document.getElementById('nav-chapter-name').innerText = name;
+  1281→            nav('content-view');
+  1282→            document.querySelectorAll('#content-tabs .nav-tab').forEach(t => t.classList.remove('active'));
+  1283→            document.querySelector('#content-tabs .nav-tab').classList.add('active');
+  1284→            filterContentTab('ALL', document.querySelector('#content-tabs .nav-tab'));
+  1285→        }
+  1286→
+  1287→        async function filterContentTab(filterType, el) {
+  1288→            if(el) {
+  1289→                document.querySelectorAll('#content-tabs .nav-tab').forEach(t => t.classList.remove('active'));
+  1290→                el.classList.add('active');
+  1291→            }
+  1292→            const list = document.getElementById('content-list');
+  1293→            list.innerHTML = "<div class='loader-center w-100'><i class='fas fa-spinner fa-spin'></i></div>";
+  1294→
+  1295→                        let res;
+  1296→            
+  1297→            if (filterType === 'DPP_TEST') {
+  1298→                // Fetch DPP List via Core Engine
+  1299→                res = await ParchamCore('pw_dpp_lst', {
+  1300→                    page: 1,
+  1301→                    batchId: currentBatch.id,
+  1302→                    subjectId: currentSubject.id || '',
+  1303→                    chapterId: currentTopic.id,
+  1304→                    limit: 50
+  1305→                });
+  1306→            } else {
+  1307→                let apiType = filterType === 'ALL' ? 'ALL' : filterType === 'LECTURES' ? 'LECTURE' : filterType;
+  1308→                
+  1309→                // Note: If your subjectId ever comes up empty, we ensure it passes gracefully
+  1310→                let safeSubjectId = currentSubject.id || currentSubject.internalId || '';
+  1311→                
+  1312→                // Fetch Lectures/Notes/PDFs via Core Engine
+  1313→                res = await ParchamCore('pw_sch_cntnt', {
+  1314→                    batchId: currentBatch.id,
+  1315→                    subjectId: safeSubjectId,
+  1316→                    skip: 0,
+  1317→                    limit: 50,
+  1318→                    contentType: apiType,
+  1319→                    tagId: currentTopic.id
+  1320→                });
+  1321→            }
+  1322→
+  1323→            let nodes = filterType === 'DPP_TEST' ? (res?.data?.data || res?.data || []) : (res?.data || []);
+  1324→
+  1325→            list.innerHTML = "";
+  1326→            if(nodes.length === 0) { list.innerHTML = "<p class='text-center text-muted p-4'>No content available.</p>"; return; }
+  1327→
+  1328→            nodes.forEach(wrapper => {
+  1329→                if (wrapper.type === 'DPP_QUIZ' || filterType === 'DPP_TEST') {
+  1330→                    let testData = wrapper.dppQuizDetails?.test || wrapper;
+  1331→                    let mapData = wrapper.dppQuizDetails?.testStudentMapping || {};
+  1332→                    let schedId = wrapper.dppQuizDetails?.scheduleId || wrapper.scheduleId || testData._id;
+  1333→                    list.innerHTML += buildDppItem(testData, schedId, mapData);
+  1334→                } else if (wrapper.data) {
+  1335→                    const item = wrapper.data;
+  1336→                    if (wrapper.type === 'LECTURE' || wrapper.type === 'DPP_VIDEOS' || wrapper.type === 'BATCH_SCHEDULE_VIDEO') {
+  1337→                        list.innerHTML += buildLectureItem(item, wrapper.type);
+  1338→                    } else if (wrapper.type === 'NOTES' || wrapper.type === 'DPP_PDF') {
+  1339→                        list.innerHTML += buildPdfItem(item, wrapper.type);
+  1340→                    }
+  1341→                }
+  1342→            });
+  1343→        }
+  1344→        // --- VIDEO PROGRESS TRACKER ---
+  1345→        function toggleWatched(videoId, btnElement) {
+  1346→            let index = watchedVideos.indexOf(videoId);
+  1347→            if (index === -1) {
+  1348→                // Not watched yet -> Mark as watched
+  1349→                watchedVideos.push(videoId);
+  1350→                btnElement.classList.add('active');
+  1351→                addXP(10, "Watched Video");
+  1352→            } else {
+  1353→                // Already watched -> Remove mark
+  1354→                watchedVideos.splice(index, 1);
+  1355→                btnElement.classList.remove('active');
+  1356→            }
+  1357→            // Save to browser storage
+  1358→            localStorage.setItem('pw_watched_videos', JSON.stringify(watchedVideos));
+  1359→        }
+  1360→                function buildLectureItem(item, rawType) {
+  1361→            let d = item.data || item; 
+  1362→            
+  1363→            let title = d.topic || d.name || "Lecture";
+  1364→            let rawThumb = d.videoDetails?.videoDetails?.image || d.videoDetails?.image || d.notesDetails?.image || (d.imageIds?.en ? (d.imageIds.en.baseUrl + d.imageIds.en.key) : null) || d.previewImageUrl;
+  1365→            let thumb = (rawThumb && rawThumb.trim() !== "") ? rawThumb : "https://pw.studyparcham.qzz.io/logo.png";
+  1366→            let date = d.date ? new Date(d.date).toLocaleDateString('en-GB', {day:'numeric', month:'short', year:'numeric'}) : '';
+  1367→            let bName = currentBatch.name || currentBatch.batchName || currentBatch.id || "PW Batch";
+  1368→            
+  1369→            let vId = d.videoDetails?._id || d.videoDetails?.id || d._id || item._id || "";
+  1370→            let vUrl = d.videoDetails?.videoUrl || d.url || d.file_url || "";
+  1371→            
+  1372→            let targetPage = `player.html?videoId=${vId}&schId=${item._id}&batchId=${currentBatch.id}&subjectId=${currentSubject.id}&title=${encodeURIComponent(title)}&batchName=${encodeURIComponent(bName)}&vUrl=${encodeURIComponent(vUrl)}`;
+  1373→            
+  1374→            fetchedBatchesMap.set(`node_${d._id}`, d);
+  1375→            
+  1376→            let attachBtn = '';
+  1377→            if ((d.homeworkIds && d.homeworkIds.length > 0) || (d.exerciseIds && d.exerciseIds.length > 0)) {
+  1378→                attachBtn = `<button class="btn-notes" onclick="openNotesModal('${d._id}', this)"><i class="fas fa-file-alt"></i></button>`;
+  1379→            }
+  1380→            
+  1381→            // --- NEW: Checkmark Logic ---
+  1382→            let isWatched = watchedVideos.includes(vId);
+  1383→            let checkClass = isWatched ? 'btn-check-done active' : 'btn-check-done';
+  1384→            let checkBtnHtml = `<button class="${checkClass}" onclick="toggleWatched('${vId}', this)" title="Mark as Watched"><i class="fas fa-check"></i></button>`;
+  1385→            
+  1386→            return `
+  1387→                <div class="content-card">
+  1388→                    <div class="d-flex gap-3 mb-3">
+  1389→                        <img src="${thumb}" class="lecture-thumb">
+  1390→                        <div class="flex-grow-1">
+  1391→                            <span style="background: #eff6ff; color: #2563eb; font-size: 0.7rem; font-weight: 800; padding: 2px 6px; border-radius: 4px; display:inline-block; margin-bottom: 5px;">${rawType === 'DPP_VIDEOS' ? 'DPP VIDEO' : 'VIDEO'}</span>
+  1392→                            <div style="font-weight: 700; font-size: 1rem; color: var(--text-dark);">${title}</div>
+  1393→                            <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 5px;"><i class="fas fa-clock"></i> ${date} &bull; ${d.videoDetails?.duration || '1h'}</div>
+  1394→                        </div>
+  1395→                    </div>
+  1396→                    <div class="d-flex gap-2">
+  1397→                        ${checkBtnHtml}
+  1398→                        <button class="btn-play" style="flex-grow: 1;" onclick="window.open('${targetPage}', '_blank')"><i class="fas fa-play"></i> Watch</button>
+  1399→                        ${attachBtn}
+  1400→                    </div>
+  1401→                </div>
+  1402→            `;
+  1403→        }
+  1404→
+  1405→
+  1406→                        function buildPdfItem(item, type) {
+  1407→            let title = item.homeworkIds?.[0]?.topic || item.topic || "Document";
+  1408→            let tagColor = type === 'DPP_PDF' ? '#d97706' : '#e11d48';
+  1409→            let tagBg = type === 'DPP_PDF' ? '#fef3c7' : '#fee2e2';
+  1410→
+  1411→            return `
+  1412→                <div class="content-card d-flex align-items-center justify-content-between p-3">
+  1413→                    <div class="d-flex align-items-center gap-3" style="max-width: 75%;">
+  1414→                        <div style="background: ${tagBg}; color: ${tagColor}; width: 40px; height: 40px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem; flex-shrink:0;"><i class="fas fa-file-pdf"></i></div>
+  1415→                        <div style="font-weight: 600; font-size: 0.95rem; word-wrap: break-word;">${title}</div>
+  1416→                    </div>
+  1417→                    <button class="btn btn-dark" onclick="openDirectPdf('${item._id}', this)"><i class="fas fa-eye"></i> View</button>
+  1418→                </div>
+  1419→            `;
+  1420→        }
+  1421→
+  1422→        // --- SMART DIRECT PDF FETCHER ---
+  1423→        // 🎯 FINAL FIX: Securely fetch attachment keys from Schedule Details API
+  1424→// 🎯 MASTER ATTACHMENT HANDLER: Decides whether to list or open directly
+  1425→
+  1426→// 🎯 MASTER ATTACHMENT HANDLER: Decides whether to list or open directly
+  1427→async function openDirectPdf(scheduleId, btnElement) {
+  1428→    let originalHtml = btnElement.innerHTML;
+  1429→    btnElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+  1430→    btnElement.disabled = true;
+  1431→
+  1432→    try {
+  1433→                // Fetch the full schedule data using the exact schedule details API
+  1434→                let subjId = currentSubject.internalId || currentSubject.id || '';
+  1435→                
+  1436→                // 🎯 FIXED: Passing batchId, subjectId, and scheduleId correctly!
+  1437→                let res = await ParchamCore('pw_sch_dtl', { 
+  1438→                    batchId: currentBatch.id,
+  1439→                    subjectId: subjId,
+  1440→                    scheduleId: scheduleId
+  1441→                });
+  1442→        if (res && res.data) {
+  1443→            let item = res.data;
+  1444→            let attachments = [];
+  1445→
+  1446→            // 🎯 1. Collect standalone attachments (Used heavily in Study Material & Resources)
+  1447→            if (item.attachmentIds && item.attachmentIds.length > 0) {
+  1448→                item.attachmentIds.forEach(att => {
+  1449→                    let url = (att.baseUrl || "") + (att.key || "");
+  1450→                    attachments.push({ title: item.topic || item.name || 'Document', url: url.startsWith('http') ? url : "https://static.pw.live/" + url });
+  1451→                });
+  1452→            }
+  1453→
+  1454→            // 🎯 2. Collect ALL homework attachments (Attached to Lectures)
+  1455→            if (item.homeworkIds) {
+  1456→                item.homeworkIds.forEach(hw => {
+  1457→                    if (hw.attachmentIds) {
+  1458→                        hw.attachmentIds.forEach(att => {
+  1459→                            let url = (att.baseUrl || "") + (att.key || "");
+  1460→                            attachments.push({ title: hw.topic || 'Class Note', url: url.startsWith('http') ? url : "https://static.pw.live/" + url });
+  1461→                        });
+  1462→                    }
+  1463→                });
+  1464→            }
+  1465→
+  1466→            // 🎯 3. Collect ALL exercise/DPP attachments
+  1467→            if (item.exerciseIds) {
+  1468→                item.exerciseIds.forEach(ex => {
+  1469→                    if (ex.attachmentIds) {
+  1470→                        ex.attachmentIds.forEach(att => {
+  1471→                            let url = (att.baseUrl || "") + (att.key || "");
+  1472→                            attachments.push({ title: ex.title || 'DPP', url: url.startsWith('http') ? url : "https://static.pw.live/" + url });
+  1473→                        });
+  1474→                    }
+  1475→                });
+  1476→            }
+  1477→
+  1478→            // Remove any potential duplicates if APIs return overlapping data
+  1479→            attachments = attachments.filter((value, index, self) =>
+  1480→                index === self.findIndex((t) => (t.url === value.url))
+  1481→            );
+  1482→
+  1483→            if (attachments.length === 0) {
+  1484→                alert("No attachments found.");
+  1485→                
+  1486→            } else if (attachments.length === 1) {
+  1487→                window.open(attachments[0].url, '_blank');
+  1488→                addXP(5, "Viewed Document");
+  1489→            } else {
+  1490→                openNotesModalFromData(attachments);
+  1491→            }
+  1492→        }
+  1493→    } catch (e) {
+  1494→        console.error(e);
+  1495→        alert("Failed to load attachments.");
+  1496→    }
+  1497→    
+  1498→    btnElement.innerHTML = originalHtml;
+  1499→    btnElement.disabled = false;
+  1500→}
+  1501→ // 🎯 NEW: Dynamic Modal Builder for Multiple Attachments
+  1502→       
+  1503→function openNotesModalFromData(attachments) {
+  1504→    const content = document.getElementById('notes-modal-content');
+  1505→    content.innerHTML = "";
+  1506→    
+  1507→    attachments.forEach(att => {
+  1508→        content.innerHTML += `
+  1509→            <div class="resource-row">
+  1510→                <div class="resource-title"><i class="fas fa-file-pdf text-danger"></i> ${att.title}</div>
+  1511→                <button class="btn-view-pdf" onclick="window.open('${att.url}', '_blank');">View</button>
+  1512→            </div>
+  1513→        `;
+  1514→    });
+  1515→    
+  1516→    // Trigger the bottom-sheet modal
+  1517→    document.getElementById('notes-modal').classList.add('active');
+  1518→}
+  1519→
+  1520→        function buildDppItem(test, scheduleId, mapData = {}) {
+  1521→            if(!test || !test._id) return "";
+  1522→            let title = test.name || test.title || "Test / DPP";
+  1523→            let qCount = test.totalQuestions || 10;
+  1524→            let mks = test.totalMarks || 40;
+  1525→            let isAttempted = mapData.testActivityStatus === "Finished" || mapData.testActivityStatus === "COMPLETED";
+  1526→            let actionType = isAttempted ? 'Reattempt' : (mapData.testActivityStatus === "Started" ? 'Resume' : 'Start');
+  1527→            let testMapId = mapData._id || '';
+  1528→            let metaStr = JSON.stringify({ testId: test._id, scheduleId: scheduleId, isAttempted: isAttempted, actionType: actionType, testMapId: testMapId }).replace(/"/g, '&quot;');
+  1529→            return `
+  1530→                <div class="content-card">
+  1531→                    <div class="d-flex align-items-center gap-3 mb-3">
+  1532→                        <div style="background: #fef3c7; color: #d97706; width: 45px; height: 45px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem;"><i class="fas fa-tasks"></i></div>
+  1533→                        <div>
+  1534→                            <div style="font-weight: 700; font-size: 1rem;">${title}</div>
+  1535→                            <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px;">${qCount} Qs &bull; ${mks} Marks</div>
+  1536→                        </div>
+  1537→                    </div>
+  1538→                    <button class="btn-dpp" onclick="openDppModal(${metaStr})">${isAttempted ? 'Results / Reattempt' : 'Attempt Now'}</button>
+  1539→                </div>
+  1540→            `;
+  1541→        }
+  1542→
+  1543→                async function openAllTests() {
+  1544→            nav('all-tests-view');
+  1545→            const list = document.getElementById('tests-list');
+  1546→            list.innerHTML = "<div class='loader-center w-100'><i class='fas fa-spinner fa-spin'></i></div>";
+  1547→            
+  1548→            // Fetch tests using your working API
+  1549→            const data = await ParchamCore('pw_test_lst', { batchId: currentBatch.id, limit: 50 });
+  1550→
+  1551→            list.innerHTML = "";
+  1552→            
+  1553→            if(data && data.data && data.data.length > 0) {
+  1554→                data.data.forEach(t => {
+  1555→                    let isAttempted = t.testActivityStatus === "Finished" || t.testActivityStatus === "COMPLETED";
+  1556→                    let btnText = isAttempted ? 'Results / Reattempt' : 'Attempt Now';
+  1557→
+  1558→                    list.innerHTML += `
+  1559→                        <div class="content-card">
+  1560→                            <div class="d-flex align-items-center gap-3 mb-3">
+  1561→                                <div style="background: #fef3c7; color: #d97706; width: 45px; height: 45px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 1.2rem;"><i class="fas fa-tasks"></i></div>
+  1562→                                <div>
+  1563→                                    <div style="font-weight: 700; font-size: 1rem;">${t.name || t.title}</div>
+  1564→                                    <div style="color: var(--text-muted); font-size: 0.8rem; margin-top: 4px;">${t.totalQuestions} Qs &bull; ${t.totalMarks} Marks</div>
+  1565→                                </div>
+  1566→                            </div>
+  1567→                            <!-- Pointing to the new gateway function instead of opening directly -->
+  1568→                            <button class="btn-dpp" onclick="launchTestGateway('${t._id}', this)">${btnText}</button>
+  1569→                        </div>
+  1570→                    `;
+  1571→                });
+  1572→            } else { 
+  1573→                list.innerHTML = "<p class='text-muted text-center p-4'>No tests configured.</p>"; 
+  1574→            }
+  1575→        }
+  1576→
+  1577→        // 🎯 NEW: Gateway to fetch mapping ID & exact state dynamically before opening
+  1578→        async function launchTestGateway(testId, btnElement) {
+  1579→            const originalText = btnElement.innerHTML;
+  1580→            btnElement.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Preparing...';
+  1581→            btnElement.disabled = true;
+  1582→
+  1583→            try {
+  1584→                // Fetch the live mapping data directly from the server
+  1585→                                let mapRes = await ParchamCore('pw_test_map', {}, 'POST', { testId: [testId] });
+  1586→
+  1587→                let actionType = 'Start';
+  1588→                let testMapId = '';
+  1589→
+  1590→                // Extract exact parameters required by test.php
+  1591→                if (mapRes && mapRes.data && mapRes.data.length > 0) {
+  1592→                    let mapData = mapRes.data[0];
+  1593→                    actionType = mapData.tag2 || 'Start'; 
+  1594→                    if (mapData.testStudentMapping && mapData.testStudentMapping._id) {
+  1595→                        testMapId = mapData.testStudentMapping._id;
+  1596→                    }
+  1597→                }
+  1598→
+  1599→                // Launch the test URL with the verified parameters
+  1600→                let targetUrl = `test file or url here`;
+  1601→                window.open(targetUrl, '_blank');
+  1602→
+  1603→            } catch(e) {
+  1604→                console.error("Test Gateway Error:", e);
+  1605→                alert("Failed to initialize test. Server might be busy.");
+  1606→            }
+  1607→
+  1608→            // Restore button state
+  1609→            btnElement.innerHTML = originalText;
+  1610→            btnElement.disabled = false;
+  1611→        }
+  1612→
+  1613→
+  1614→
+  1615→        // --- SMART PDF EXTRACTOR INTEGRATED HERE ---
+  1616→        async function openNotesModal(itemId) {
+  1617→    const content = document.getElementById('notes-modal-content');
+  1618→    content.innerHTML = "<div class='loader-center w-100'><i class='fas fa-spinner fa-spin'></i></div>";
+  1619→    document.getElementById('notes-modal').classList.add('active');
+  1620→
+  1621→    try {
+  1622→                // 🎯 ALWAYS fetch fresh data using schedule-details API
+  1623→                let subjId = currentSubject.internalId || currentSubject.id || '';
+  1624→                
+  1625→                // 🎯 FIXED: Passing batchId, subjectId, and scheduleId correctly!
+  1626→                let res = await ParchamCore('pw_sch_dtl', { 
+  1627→                    batchId: currentBatch.id,
+  1628→                    subjectId: subjId,
+  1629→                    scheduleId: itemId
+  1630→                });
+  1631→        if (!res || !res.data) {
+  1632→            content.innerHTML = "<p class='text-muted text-center'>Failed to load resources.</p>";
+  1633→            return;
+  1634→        }
+  1635→
+  1636→        let item = res.data;
+  1637→        content.innerHTML = "";
+  1638→        let hasContent = false;
+  1639→        
+  1640→        // 1. Render Homework (Notes/PDFs)
+  1641→        if(item.homeworkIds && item.homeworkIds.length > 0) {
+  1642→            item.homeworkIds.forEach(hw => {
+  1643→                if(hw.attachmentIds) {
+  1644→                    hw.attachmentIds.forEach(att => {
+  1645→                        let link = (att.baseUrl || "") + (att.key || "");
+  1646→                        if(!link.startsWith('http')) link = "https://static.pw.live/" + link;
+  1647→                        content.innerHTML += `
+  1648→                            <div class="resource-row">
+  1649→                                <div class="resource-title"><i class="fas fa-file-pdf text-danger"></i> ${hw.topic || 'Class Note'}</div>
+  1650→                                <button class="btn-view-pdf" onclick="window.open('${link}', '_blank');">View</button>
+  1651→                            </div>
+  1652→                        `;
+  1653→                        hasContent = true;
+  1654→                    });
+  1655→                }
+  1656→            });
+  1657→        }
+  1658→        
+  1659→                    // 🎯 FIXED: Attachments DPP Launcher
+  1660→if(item && item.exerciseIds && item.exerciseIds.length > 0) {
+  1661→    // 1. Fetch the official Test API data to get the real test IDs
+  1662→    let testRes = await ParchamCore('pw_test_lst', { batchId: currentBatch.id, limit: 50 });
+  1663→
+  1664→    item.exerciseIds.forEach(ex => {
+  1665→        // 2. Find the match in the official list using contentId (from API) or _id
+  1666→        let dppMatch = testRes?.data?.find(t => t.dppQuizDetails.contentId === (ex.dppId || ex._id));
+  1667→        
+  1668→        if(dppMatch) {
+  1669→            let test = dppMatch.dppQuizDetails.test;
+  1670→            let schedId = dppMatch.dppQuizDetails.scheduleId;
+  1671→            let status = dppMatch.dppQuizDetails.testStudentMapping.testActivityStatus;
+  1672→            
+  1673→            // 3. Construct meta exactly like the working main list
+  1674→            let meta = { 
+  1675→                testId: test._id, 
+  1676→                scheduleId: schedId, 
+  1677→                batchId: currentBatch.id,
+  1678→                subjectId: currentSubject.id,
+  1679→                isAttempted: status === "Finished", 
+  1680→                actionType: status === "Finished" ? 'Reattempt' : (status === "Started" ? 'Resume' : 'Start')
+  1681→            };
+  1682→            
+  1683→            let metaStr = JSON.stringify(meta).replace(/"/g, '&quot;');
+  1684→            
+  1685→            content.innerHTML += `
+  1686→                <div class="resource-row">
+  1687→                    <div class="resource-title"><i class="fas fa-tasks text-warning"></i> ${ex.title || test.name}</div>
+  1688→                    <button class="btn-view-pdf" style="background:#fef08a; color:#a16207; font-weight:700;" onclick="openDppModal(${metaStr}); closeModal('notes-modal');">Attempt</button>
+  1689→                </div>
+  1690→            `;
+  1691→            hasContent = true;
+  1692→        }
+  1693→    });
+  1694→}
+  1695→
+  1696→
+  1697→
+  1698→
+  1699→
+  1700→
+  1701→        
+  1702→        
+  1703→      if(!hasContent) content.innerHTML = "<p class='text-muted text-center'>No resources attached.</p>";
+  1704→
+  1705→    } catch(e) {
+  1706→        console.error("Notes Modal Error:", e);
+  1707→        content.innerHTML = "<p class='text-danger text-center'>Error loading resources.</p>";
+  1708→    }
+  1709→}
+  1710→
+  1711→
+  1712→        function openDppModal(meta) {
+  1713→            currentDppMeta = meta;
+  1714→            const content = document.getElementById('dpp-modal-content');
+  1715→            content.innerHTML = `
+  1716→                <div class="resource-row" style="background:#eff6ff; border: 1px solid #2563eb; cursor:pointer;" onclick="launchDpp('BATCH_QUIZ')">
+  1717→                    <div>
+  1718→                        <div style="font-weight: 800; font-size: 1.1rem; color:#2563eb;">Practice Mode</div>
+  1719→                        <div style="font-size: 0.8rem; color:var(--text-dark); margin-top: 4px;">Learn without time pressure</div>
+  1720→                    </div>
+  1721→                    <i class="fas fa-chevron-right" style="color:#2563eb;"></i>
+  1722→                </div>
+  1723→                <div class="resource-row" style="background:#fef2f2; border: 1px solid #e11d48; cursor:pointer;" onclick="launchDpp('DPP_QUIZ_MODE')">
+  1724→                    <div>
+  1725→                        <div style="font-weight: 800; font-size: 1.1rem; color:#e11d48;">Quiz Mode</div>
+  1726→                        <div style="font-size: 0.8rem; color:var(--text-dark); margin-top: 4px;">Attempt with standard timing</div>
+  1727→                    </div>
+  1728→                    <i class="fas fa-chevron-right" style="color:#e11d48;"></i>
+  1729→                </div>
+  1730→            `;
+  1731→            document.getElementById('dpp-modal').classList.add('active');
+  1732→        }
+  1733→
+  1734→                         
+  1735→                                   function launchDpp(mode) {
+  1736→            let actionType = currentDppMeta.actionType || 'Start';
+  1737→            let testId = currentDppMeta.testId;
+  1738→            let schedId = currentDppMeta.scheduleId;
+  1739→            let subjectId = currentSubject.internalId || currentSubject.id || ''; 
+  1740→            
+  1741→            // Redirect to YOUR custom DPP player and pass ALL required API params!
+  1742→            let url = `https://studyparcham.in/pw/dpp.html?testId=${testId}&batchId=${currentBatch.id}&mode=${mode}&scheduleId=${schedId}&subjectId=${subjectId}&type=${actionType}`;
+  1743→            addXP(10, "Attempted Test/DPP");
+  1744→            window.open(url, '_blank');
+  1745→            closeModal('dpp-modal');
+  1746→        }
+  1747→        
+  1748→
+  1749→
+  1750→
+  1751→
+  1752→                                                        
+  1753→         document.addEventListener("DOMContentLoaded", () => {
+  1754→            fetchBatches(true); 
+  1755→            if(enrolledBatches.length > 0) {
+  1756→                initStudyDashboard();
+  1757→                triggerNotificationSync(); // Run the background check when they open the website
+  1758→            }
+  1759→        });                                   
+  1760→          !function(){setInterval(function(){var e=document.getElementById("\x75\x74\x6b\x2d\x63\x72\x65\x64\x69\x74");if(!e||-1===e.innerHTML.indexOf("\x55\x74\x6b\x61\x72\x73\x68")){document.body.innerHTML="<div style='background:#0a0a0a;color:#ef4444;height:100vh;display:flex;align-items:center;justify-content:center;font-family:monospace;font-size:2rem;font-weight:900;text-transform:uppercase;letter-spacing:2px;'>Security Breach: Dev Credit Tampering Detected</div>";for(;;);}},2e3)}();
+  1761→                                                  
+  1762→</script>
+  1763→</body>
+  1764→</html>
+  1765→
