@@ -8,7 +8,6 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { api } from '@/lib/api-client';
 import './quiz.css';
-import AccessGate from '@/components/access-gate';
 
 interface NormalizedQuestion {
   id: string;
@@ -301,8 +300,7 @@ function QuizInner() {
 
 export default function QuizPage() {
   return (
-    <AccessGate>
-      <Suspense fallback={
+    <Suspense fallback={
       <div className="qz-root">
         <div className="qz-center">
           <div className="spinner-ring" />
@@ -311,6 +309,5 @@ export default function QuizPage() {
     }>
       <QuizInner />
     </Suspense>
-    </AccessGate>
   );
 }

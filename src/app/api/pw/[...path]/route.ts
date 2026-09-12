@@ -1,14 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { CLOUDFRONT_HOST, getSignedQuery } from '@/lib/pw-cdn';
+import {
+  CLOUDFRONT_HOST,
+  getSignedQuery,
+  getHostForFolder,
+  pwProxyOrigin,
+} from '@/lib/pw-cdn';
 
 export const dynamic = 'force-dynamic';
 
 // ---------------------------------------------------------------------------
 // GET /api/pw/<folder>/<file...>
 // GET /api/pw/<folder>/s/<sig>/<file...>      ← stateless form
+// GET /api/pw/h/<host>/<folder>/...           ← explicit distribution host
 //
 // Same-origin relay for the REAL PW CloudFront media (signed per video
 // folder by the upstream video-url API).
+//
+// Upstream fetches go through the owner's proxy gateway (the same API the
+// production site uses for lectures):
+//     https://proxy.studyparcham.in/{cf_host}/{path}{signature}
+// Set PW_CDN_DIRECT=1 to bypass the gateway and hit CloudFront directly.
 //
 // The DASH manifests use RELATIVE segment URLs, so the signature is carried
 // in the path (`/s/<base64url-of-query>/`) and every relative segment the
@@ -16,27 +27,31 @@ export const dynamic = 'force-dynamic';
 // signature. The in-memory registry (pw-cdn) is kept as a fallback for URLs
 // without the path signature.
 //
-//   master.mpd  → passthrough (segment URLs inside are relative)
-//   *.m3u8      → playlist with every URI rewritten to this same route
-//   everything  → raw asset bytes (init.mp4, segments, .ts, enc.key) with
-//                 Range passthrough for seeking
+//   master.mpd / main.m3u8 → playlist rewritten to this same route
+//   everything else        → raw asset bytes (init.mp4, segments, .ts, enc.key)
+//                             with Range passthrough for seeking
 // ---------------------------------------------------------------------------
 
 const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
-const SAFE_SIG = /^[A-Za-z0-9_-]{8,}$/
+const SAFE_HOST = /^[a-z0-9.-]+\.cloudfront\.net$/i;
+const SAFE_SIG = /^[A-Za-z0-9_-]{8,}$/;
 
-function buildUpstreamUrl(folder: string, asset: string[], query: string): string | null {
+function buildUpstreamUrl(host: string, folder: string, asset: string[], query: string): string | null {
   if (asset.length === 0) return null;
   if (!/^[a-f0-9-]{16,}$/i.test(folder)) return null;
+  if (!SAFE_HOST.test(host)) return null;
   for (const seg of asset) {
     if (!SAFE_SEGMENT.test(seg)) return null; // no traversal, no url tricks
   }
   const path = [folder, ...asset].map(encodeURIComponent).join('/');
-  return `https://${CLOUDFRONT_HOST}/${path}${query}`;
+  if (process.env.PW_CDN_DIRECT === '1') {
+    return `https://${host}/${path}${query}`;
+  }
+  return `${pwProxyOrigin()}/${host}/${path}${query}`;
 }
 
 /** Rewrite every playlist URI (absolute or relative) to our relay route. */
-function rewritePlaylist(body: string, base: string): string {
+function rewritePlaylist(body: string, base: string, host: string): string {
   return body
     .split('\n')
     .map((rawLine) => {
@@ -45,21 +60,21 @@ function rewritePlaylist(body: string, base: string): string {
       if (line.startsWith('#')) {
         // rewrite URIs inside tags (KEY / MAP / EXT-X-MEDIA etc.)
         if (/^#(EXT-X-KEY|EXT-X-MAP|EXT-X-MEDIA|EXT-X-I-FRAME-STREAM-INF|EXT-X-SESSION-KEY)/i.test(line)) {
-          return line.replace(/URI="([^"]+)"/i, (_m, uri: string) => `URI="${joinUri(base, uri)}"`);
+          return line.replace(/URI="([^"]+)"/i, (_m, uri: string) => `URI="${joinUri(base, uri, host)}"`);
         }
         return rawLine;
       }
-      return joinUri(base, line);
+      return joinUri(base, line, host);
     })
     .join('\n');
 }
 
-function joinUri(base: string, uri: string): string {
+function joinUri(base: string, uri: string, host: string): string {
   if (/^https?:\/\//i.test(uri)) {
     // same-host absolute → keep only the path inside the folder
     try {
       const u = new URL(uri);
-      if (u.host === CLOUDFRONT_HOST) {
+      if (u.host === host || /\.cloudfront\.net$/i.test(u.host)) {
         const parts = u.pathname.split('/').filter(Boolean);
         if (parts[0] && parts[0].length > 16) return `${base}/${parts.slice(1).join('/')}`;
       }
@@ -84,16 +99,25 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ path: s
     return NextResponse.json({ success: false, error: 'Bad path' }, { status: 400 });
   }
 
-  // Stateless form: /api/pw/<folder>/s/<sig>/<asset...>
-  let folder = parts[0];
+  // Optional explicit host form: /api/pw/h/<host>/<folder>/...
+  let host = '';
+  let cursor = 0;
+  if (parts[0] === 'h' && parts.length >= 3) {
+    host = parts[1];
+    cursor = 2;
+  }
+
+  let folder = parts[cursor];
   let sigSegment: string | null = null;
   let asset: string[];
-  if (parts[1] === 's' && parts.length >= 4 && SAFE_SIG.test(parts[2])) {
-    sigSegment = parts[2];
-    asset = parts.slice(3);
+  if (parts[cursor + 1] === 's' && parts.length >= cursor + 4 && SAFE_SIG.test(parts[cursor + 2])) {
+    sigSegment = parts[cursor + 2];
+    asset = parts.slice(cursor + 3);
   } else {
-    asset = parts.slice(1);
+    asset = parts.slice(cursor + 1);
   }
+
+  if (!host) host = getHostForFolder(folder) || CLOUDFRONT_HOST;
 
   let signedQuery: string | null = null;
   if (sigSegment) {
@@ -114,7 +138,7 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ path: s
     );
   }
 
-  const upstream = buildUpstreamUrl(folder, asset, signedQuery);
+  const upstream = buildUpstreamUrl(host, folder, asset, signedQuery);
   if (!upstream) {
     return NextResponse.json({ success: false, error: 'Bad path' }, { status: 400 });
   }
@@ -147,10 +171,11 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ path: s
     if (isPlaylist || isManifest) {
       const text = await upstreamRes.text();
       clearTimeout(timer);
+      const hostSeg = host === CLOUDFRONT_HOST ? '' : '/h/' + host;
       const base = sigSegment
-        ? `/api/pw/${folder}/s/${sigSegment}`
-        : `/api/pw/${folder}`;
-      const body = isPlaylist ? rewritePlaylist(text, base) : text;
+        ? `/api/pw${hostSeg}/${folder}/s/${sigSegment}`
+        : `/api/pw${hostSeg}/${folder}`;
+      const body = isPlaylist ? rewritePlaylist(text, base, host) : text;
       return new NextResponse(body, {
         status: 200,
         headers: {

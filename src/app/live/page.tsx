@@ -9,7 +9,7 @@ import type ShakaNamespace from 'shaka-player';
 import './live.css';
 import { api, imageUrl } from '@/lib/api-client';
 import { isHlsUrl, isMpdUrl, youtubeId } from '@/lib/video-utils';
-import AccessGate from '@/components/access-gate';
+import { LIVE_MANIFEST_URL } from '@/lib/live-stream';
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
@@ -39,6 +39,12 @@ function LiveInner() {
   const subjectId = params.get('subjectId') || params.get('SubjectId') || '';
   const title = params.get('title') || 'PW Live Class';
   const vUrl = params.get('vUrl') || '';
+  // DVR start epoch for the shared live channel (?start=<epoch>)
+  const [startOffset] = useState(() => {
+    const s = Number(params.get('start'));
+    return Number.isFinite(s) && s > 0 ? Math.floor(s) : 0;
+  });
+  const liveFallbackDone = useRef(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -71,13 +77,15 @@ function LiveInner() {
   const [copied, setCopied] = useState(false);
 
   // ------------------------------------------------------------------
-  // Resolve payload
+  // Resolve payload — per-batch/class content FIRST (each batch plays its
+  // own lecture, not one shared video), shared live channel as fallback.
   // ------------------------------------------------------------------
   useEffect(() => {
     let cancelled = false;
     (async () => {
       setError('');
-      if (vUrl) {
+      // 1) direct passthrough for non-CloudFront URLs (youtube / plain files)
+      if (vUrl && !/\.cloudfront\.net/i.test(vUrl)) {
         setSrc(vUrl);
         if (isMpdUrl(vUrl)) setKind('dash');
         else if (isHlsUrl(vUrl)) setKind('hls');
@@ -86,32 +94,40 @@ function LiveInner() {
         setLoading(false);
         return;
       }
-      if (!videoId) {
-        setError('Missing URL Parameters.');
+      // 2) per-batch/class payload (batch-specific lecture video)
+      if (videoId) {
+        try {
+          const res = await api.videoPayload(videoId, batchId, subjectId, vUrl);
+          if (cancelled) return;
+          if (res.success && res.data && res.data.url) {
+            setKind(res.data.kind || 'mp4');
+            setSrc(res.data.url);
+            setClearKeys(res.data.clearKeys || null);
+            setLoading(false);
+            return;
+          }
+        } catch {
+          /* fall through to the shared channel */
+        }
+        if (cancelled) return;
+      }
+      // 3) shared live channel fallback (one attempt, DVR start when given)
+      if (!liveFallbackDone.current) {
+        liveFallbackDone.current = true;
+        setKind('hls');
+        setSrc(startOffset > 0 ? `${LIVE_MANIFEST_URL}?start=${startOffset}` : LIVE_MANIFEST_URL);
         setLoading(false);
         return;
       }
-      try {
-        const res = await api.videoPayload(videoId, batchId, subjectId);
-        if (cancelled) return;
-        if (!res.success || !res.data || !res.data.url) {
-          throw new Error(res.error || 'Live Stream Offline');
-        }
-        setKind(res.data.kind || 'mp4');
-        setSrc(res.data.url);
-        setClearKeys(res.data.clearKeys || null);
+      if (!cancelled) {
+        setError('Live Stream Offline');
         setLoading(false);
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : 'Live Stream Offline');
-          setLoading(false);
-        }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [videoId, batchId, subjectId, vUrl]);
+  }, [videoId, batchId, subjectId, vUrl, startOffset]);
 
   // ------------------------------------------------------------------
   // Attach source by kind
@@ -519,8 +535,7 @@ function LiveInner() {
 
 export default function LivePage() {
   return (
-    <AccessGate>
-      <Suspense fallback={
+    <Suspense fallback={
       <div className="sb-live-root">
         <div className="video-wrapper">
           <div className="loader-overlay">
@@ -532,6 +547,5 @@ export default function LivePage() {
     }>
       <LiveInner />
     </Suspense>
-    </AccessGate>
   );
 }

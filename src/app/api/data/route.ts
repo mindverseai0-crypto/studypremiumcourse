@@ -16,7 +16,15 @@ import {
   LxScheduleItem,
   LxContentType,
 } from "@/lib/lx-api";
-import { registerSignedFolder, folderFromUrl } from "@/lib/pw-cdn";
+import {
+  registerSignedFolder,
+  registerFolderHost,
+  folderFromUrl,
+  hostFromUrl,
+  subPathFromUrl,
+  getSignedQuery,
+  getFallbackSignedQuery,
+} from "@/lib/pw-cdn";
 
 void lxAllBatches; // catalog lives in /api/batches
 
@@ -245,6 +253,51 @@ function upstreamContentType(contentType: string): LxContentType {
   }
 }
 
+/**
+ * Direct (unsigned) CloudFront urls per schedule item from the owner's
+ * V2 listing API — the same source the production site merges into its
+ * content lists. Best-effort: failure simply leaves the nodes untouched.
+ */
+async function v2DirectUrls(
+  batchId: string,
+  subjectId: string,
+  tagId: string,
+): Promise<Map<string, { url: string; videoId: string }>> {
+  const out = new Map<string, { url: string; videoId: string }>();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 9000);
+    const res = await fetch("https://pw.studyparcham.in/api/data", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      cache: "no-store",
+      signal: controller.signal,
+      body: JSON.stringify({
+        action: "pw_v2_list",
+        params: { batchId, subjectId, tagId, contentType: "videos", page: 1 },
+        method: "GET",
+        payload: null,
+      }),
+    });
+    clearTimeout(timer);
+    if (!res.ok) return out;
+    const body = (JSON.parse(await res.text()) as {
+      data?: Array<{
+        _id?: string;
+        url?: string;
+        videoDetails?: { videoUrl?: string; _id?: string };
+      }>;
+    });
+    for (const it of body.data || []) {
+      const u = it.url || it.videoDetails?.videoUrl || "";
+      if (it._id && u) out.set(it._id, { url: u, videoId: it.videoDetails?._id || "" });
+    }
+  } catch {
+    /* best-effort merge */
+  }
+  return out;
+}
+
 /** base64url-encode a signed query for the stateless /s/<sig>/ relay path. */
 function sigPathSegment(signedQuery: string): string {
   const q = signedQuery.startsWith("?") ? signedQuery.slice(1) : signedQuery;
@@ -252,21 +305,127 @@ function sigPathSegment(signedQuery: string): string {
   return Buffer.from(q, "utf8").toString("base64url");
 }
 
+// ---------------------------------------------------------------------------
+// Lecture stream signing chain (server-side only).
+//
+// 1. signedUrl from the upstream video-url API (per-video folder policy)
+// 2. LECTURE_SIGN_URL env template (owner's signing service, e.g.
+//    https://video-detail.studyparcham.in/?batch_id={batch_id}&video_id={video_id}&subject_id={subject_id})
+// 3. non-expired fallback constants registered in pw-cdn
+// ---------------------------------------------------------------------------
+
+async function envSignerSignedQuery(
+  batchId: string,
+  videoId: string,
+  subjectId: string,
+): Promise<string> {
+  const tpl = process.env.LECTURE_SIGN_URL || "";
+  if (!tpl) return "";
+  const url = tpl
+    .replace(/\{batch_id\}/g, encodeURIComponent(batchId))
+    .replace(/\{video_id\}/g, encodeURIComponent(videoId))
+    .replace(/\{subject_id\}/g, encodeURIComponent(subjectId));
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    const res = await fetch(url, {
+      cache: "no-store",
+      signal: controller.signal,
+      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0" },
+    });
+    clearTimeout(timer);
+    if (!res.ok) return "";
+    const body = (await res.json()) as {
+      url?: string;
+      signedUrl?: string;
+      data?: { url?: string; signedUrl?: string };
+    };
+    const signed = body.signedUrl || body.data?.signedUrl || "";
+    if (signed) return signed.startsWith("?") ? signed : `?${signed}`;
+    // a signed absolute URL works too — peel off its query
+    const abs = body.url || body.data?.url || "";
+    if (abs.includes("Signature=")) {
+      const q = abs.slice(abs.indexOf("?"));
+      return q;
+    }
+    return "";
+  } catch {
+    return "";
+  }
+}
+
+/** Resolve the folder-wide signed query for a video through the whole chain. */
+async function resolveSignedQuery(
+  folder: string,
+  opts: { batchId: string; videoId: string; subjectId: string; signedUrl?: string },
+): Promise<string> {
+  if (opts.signedUrl) {
+    registerSignedFolder(folder, opts.signedUrl);
+    return opts.signedUrl.startsWith("?") ? opts.signedUrl : `?${opts.signedUrl}`;
+  }
+  const envSig = await envSignerSignedQuery(opts.batchId, opts.videoId, opts.subjectId);
+  if (envSig) {
+    registerSignedFolder(folder, envSig);
+    return envSig;
+  }
+  const fb = getFallbackSignedQuery(folder);
+  if (fb) {
+    registerSignedFolder(folder, fb);
+    return fb;
+  }
+  const cached = getSignedQuery(folder);
+  return cached || "";
+}
+
+/**
+ * Same-origin relay URL for a resolved CloudFront asset — keeps the REAL
+ * manifest path from the upstream url (e.g. hls/720/main.m3u8, master.mpd)
+ * instead of guessing, and carries the signature statelessly in the path.
+ */
+async function relayUrlFor(
+  rawUrl: string,
+  opts: { batchId: string; videoId: string; subjectId: string; signedUrl?: string },
+): Promise<{ url: string; signedQuery: string } | null> {
+  const host = hostFromUrl(rawUrl);
+  const folder = folderFromUrl(rawUrl);
+  const sub = subPathFromUrl(rawUrl);
+  if (!folder || !sub) return null;
+  const signedQuery = await resolveSignedQuery(folder, { ...opts, signedUrl: opts.signedUrl || "" });
+  if (host) registerFolderHost(folder, host);
+  if (!signedQuery) return null;
+  const sig = sigPathSegment(signedQuery);
+  const hostSeg = host && host !== "d1d34p8vz63oiq.cloudfront.net" ? `/h/${host}` : "";
+  return { url: `/api/pw${hostSeg}/${folder}${sig ? `/s/${sig}` : ""}/${sub}`, signedQuery };
+}
+
 /** Resolve a video → same-origin playable payload (dash/hls/youtube/mp4). */
-async function resolveVideoPayload(childId: string, batchId: string, subjectId: string) {
-  const vid = await lxVideoUrl(batchId, subjectId, childId);
-  if (vid?.url) {
-    const url = vid.url.trim();
+async function resolveVideoPayload(
+  childId: string,
+  batchId: string,
+  subjectId: string,
+  vUrlParam = "",
+  realVideoId = "",
+) {
+  let vid = await lxVideoUrl(batchId, subjectId, childId).catch(() => null);
+  if (!vid && realVideoId && realVideoId !== childId) {
+    vid = await lxVideoUrl(batchId, subjectId, realVideoId).catch(() => null);
+  }
+  const sigOpts = { batchId, videoId: realVideoId || childId, subjectId };
+  const rawUrl = vid?.url?.trim() || vUrlParam.trim();
+  if (rawUrl) {
+    const url = rawUrl;
     if (/\.mpd(\?|$)/i.test(url)) {
-      const folder = folderFromUrl(url);
-      const sig = sigPathSegment(vid.signedUrl || "");
-      if (folder && sig) registerSignedFolder(folder, vid.signedUrl || "");
+      const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: vid?.signedUrl || "" });
+      if (!relay) return null;
       let clearKeys: Record<string, string> | null = null;
       try {
-        const mpdUrl = `${url}${vid.signedUrl || ""}`;
+        const upstreamBase = process.env.PW_CDN_DIRECT === "1" ? "" : "https://proxy.studyparcham.in/";
+        const abs = upstreamBase
+          ? `${upstreamBase}${new URL(url).host}${new URL(url).pathname}${relay.signedQuery}`
+          : `${url}${relay.signedQuery}`;
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), 30000);
-        const mpdRes = await fetch(mpdUrl, {
+        const mpdRes = await fetch(abs, {
           cache: "no-store",
           signal: controller.signal,
           headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
@@ -282,14 +441,9 @@ async function resolveVideoPayload(childId: string, batchId: string, subjectId: 
       } catch {
         /* keys unavailable — player will surface a decrypt error */
       }
-      // Stateless relay URL: relative DASH segments inherit the signature.
-      const manifestUrl = folder
-        ? `/api/pw/${folder}${sig ? `/s/${sig}` : ""}/master.mpd`
-        : "";
-      if (!manifestUrl) return null;
       return {
         kind: "dash",
-        url: manifestUrl,
+        url: relay.url,
         signedUrl: "",
         clearKeys,
         poster: "",
@@ -297,13 +451,11 @@ async function resolveVideoPayload(childId: string, batchId: string, subjectId: 
       };
     }
     if (/\.m3u8(\?|$)/i.test(url)) {
-      const folder = folderFromUrl(url);
-      const sig = sigPathSegment(vid.signedUrl || "");
-      if (!folder) return null;
-      if (sig) registerSignedFolder(folder, vid.signedUrl || "");
+      const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: vid?.signedUrl || "" });
+      if (!relay) return null;
       return {
         kind: "hls",
-        url: `/api/pw/${folder}${sig ? `/s/${sig}` : ""}/master.m3u8`,
+        url: relay.url,
         signedUrl: "",
         clearKeys: null,
         poster: "",
@@ -314,27 +466,22 @@ async function resolveVideoPayload(childId: string, batchId: string, subjectId: 
       return { kind: "youtube", url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
     }
     // plain file (mp4 etc.) inside the signed folder
-    const folder = folderFromUrl(url);
-    const sig = sigPathSegment(vid.signedUrl || "");
-    if (folder) {
-      if (sig) registerSignedFolder(folder, vid.signedUrl || "");
-      const fileName = url.split("/").pop() || "video.mp4";
-      return {
-        kind: "mp4",
-        url: `/api/pw/${folder}${sig ? `/s/${sig}` : ""}/${fileName}`,
-        signedUrl: "",
-        clearKeys: null,
-        poster: "",
-        drmDetails: null,
-      };
-    }
-    return { kind: "mp4", url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+    const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: vid?.signedUrl || "" });
+    if (!relay) return null;
+    return {
+      kind: "mp4",
+      url: relay.url,
+      signedUrl: "",
+      clearKeys: null,
+      poster: "",
+      drmDetails: null,
+    };
   }
 
   // No signed stream — maybe a youtube lecture.
   if (subjectId) {
-    const detail = await lxScheduleDetail(batchId, subjectId, childId);
-    const url = detail?.url || "";
+    const detail = await lxScheduleDetail(batchId, subjectId, childId).catch(() => null);
+    const url = (detail as { url?: string } | null)?.url || "";
     if (url && /youtube\.com|youtu\.be/i.test(url)) {
       return { kind: "youtube", url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
     }
@@ -443,6 +590,24 @@ export async function POST(request: NextRequest) {
         try {
           const items = await lxTopicContent(batchId, subjectId, tagId, upstreamContentType(contentType), page);
           const nodes = contentNodesFromItems(batchId, subjectId, items, kind);
+          if (kind === "LECTURE" || kind === "DPP_VIDEOS") {
+            // Magic merge: inject the direct V2 video urls into the nodes so
+            // the player can resolve a stream even when video-url is gated.
+            const v2 = await v2DirectUrls(batchId, subjectId, tagId);
+            if (v2.size > 0) {
+              for (const n of nodes) {
+                const hit = v2.get(n._id);
+                if (!hit) continue;
+                const d = n.data as Record<string, unknown>;
+                d.url = hit.url;
+                const vd = d.videoDetails as Record<string, unknown> | undefined;
+                if (vd) {
+                  vd.videoUrl = hit.url;
+                  if (hit.videoId) vd._id = hit.videoId;
+                }
+              }
+            }
+          }
           return NextResponse.json({ success: true, data: nodes }, { headers: CORS_HEADERS });
         } catch {
           return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
@@ -634,11 +799,13 @@ export async function POST(request: NextRequest) {
         const childId = str(params.childId).trim();
         const batchId = str(params.batchId).trim();
         const subjectId = str(params.subjectId).trim();
+        const vUrl = str(params.vUrl).trim();
+        const realVideoId = str(params.videoId).trim();
         if (!childId || !batchId || !subjectId) {
           return NextResponse.json({ success: false }, { headers: CORS_HEADERS });
         }
         try {
-          const data = await resolveVideoPayload(childId, batchId, subjectId);
+          const data = await resolveVideoPayload(childId, batchId, subjectId, vUrl, realVideoId);
           if (!data) return NextResponse.json({ success: false }, { headers: CORS_HEADERS });
           return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
         } catch (e) {

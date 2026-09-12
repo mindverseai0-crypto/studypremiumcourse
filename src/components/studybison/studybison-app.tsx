@@ -427,10 +427,12 @@ export default function StudyBisonApp() {
     const date = d.date ? new Date(d.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
     const vId = d._id || d.videoDetails?._id || node._id;
     const master = currentSubject?.masterId || currentSubject?.id || '';
+    const rawVUrl = d.url || d.videoDetails?.videoUrl || '';
+    const realVideoId = d.videoDetails?._id && d.videoDetails._id !== vId ? d.videoDetails._id : '';
     const isWatched = watched.includes(vId);
     const bName = currentBatch?.name || 'PW Batch';
     const base = node.type === 'DPP_VIDEOS' ? '/player' : '/player';
-    const playerUrl = `${base}?videoId=${encodeURIComponent(vId)}&batchId=${encodeURIComponent(currentBatchId || '')}&subjectId=${encodeURIComponent(master)}&schId=${encodeURIComponent(node._id)}&title=${encodeURIComponent(title)}&batchName=${encodeURIComponent(bName)}`;
+    const playerUrl = `${base}?videoId=${encodeURIComponent(vId)}&batchId=${encodeURIComponent(currentBatchId || '')}&subjectId=${encodeURIComponent(master)}&schId=${encodeURIComponent(node._id)}&title=${encodeURIComponent(title)}&batchName=${encodeURIComponent(bName)}&vUrl=${encodeURIComponent(rawVUrl)}${realVideoId ? `&lectureVideoId=${encodeURIComponent(realVideoId)}` : ''}`;
     const hasAttachments = d.homeworkIds && d.homeworkIds.length > 0;
 
     return (

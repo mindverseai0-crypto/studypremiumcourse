@@ -11,7 +11,6 @@ import './player.css';
 import { api } from '@/lib/api-client';
 import { addXP } from '@/lib/local-state';
 import { isHlsUrl, isMpdUrl, youtubeId } from '@/lib/video-utils';
-import AccessGate from '@/components/access-gate';
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
@@ -31,6 +30,8 @@ function PlayerInner() {
   const subjectId = params.get('subjectId') || params.get('SubjectId') || '';
   const title = params.get('title') || 'PW Lecture';
   const vUrl = params.get('vUrl') || '';
+  // real PW video id (videoDetails._id) when it differs from the schedule id
+  const realVideoId = params.get('lectureVideoId') || '';
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -68,8 +69,9 @@ function PlayerInner() {
       setDuration(0);
       setCurrentTime(0);
       xpGiven.current = false;
-      if (vUrl) {
-        // direct URL (mp4 / m3u8 / mpd / youtube)
+      if (vUrl && !/\.cloudfront\.net/i.test(vUrl)) {
+        // direct URL (mp4 / m3u8 / mpd / youtube) — non-CloudFront hosts only;
+        // CloudFront folders must be signed server-side via parcham_vid.
         setSrc(vUrl);
         if (isMpdUrl(vUrl)) setKind('dash');
         else if (isHlsUrl(vUrl)) setKind('hls');
@@ -87,7 +89,7 @@ function PlayerInner() {
       setStatus('Fetching lecture...');
       setStatusSub('Resolving secure stream');
       try {
-        const res = await api.videoPayload(videoId, batchId, subjectId);
+        const res = await api.videoPayload(videoId, batchId, subjectId, vUrl, realVideoId);
         if (cancelled) return;
         if (!res.success || !res.data || !res.data.url) {
           throw new Error(res.error || 'This lecture is not available right now.');
@@ -108,7 +110,7 @@ function PlayerInner() {
     return () => {
       cancelled = true;
     };
-  }, [videoId, batchId, subjectId, vUrl]);
+  }, [videoId, batchId, subjectId, vUrl, realVideoId]);
 
   // ------------------------------------------------------------------
   // Attach the source by kind.
@@ -445,8 +447,7 @@ function PlayerInner() {
 
 export default function PlayerPage() {
   return (
-    <AccessGate>
-      <Suspense fallback={
+    <Suspense fallback={
       <div className="sb-player-root">
         <div className="video-wrapper">
           <div className="loader-overlay">
@@ -458,6 +459,5 @@ export default function PlayerPage() {
     }>
       <PlayerInner />
     </Suspense>
-    </AccessGate>
   );
 }

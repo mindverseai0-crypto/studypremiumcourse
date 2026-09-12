@@ -173,8 +173,8 @@ export const api = {
     parchamCore<Record<string, unknown>>('pw_sch_dtl', { batchId, scheduleId, subjectId }),
   todaySchedule: (batchId: string) =>
     parchamCore<ScheduleEventPublic[]>('pw_tdy_sch', { batchId }),
-  videoPayload: (childId: string, batchId: string, subjectId: string) =>
-    parchamCore<VideoPayloadPublic | null>('parcham_vid', { childId, batchId, subjectId }),
+  videoPayload: (childId: string, batchId: string, subjectId: string, vUrl = '', realVideoId = '') =>
+    parchamCore<VideoPayloadPublic | null>('parcham_vid', { childId, batchId, subjectId, vUrl, videoId: realVideoId }),
 };
 
 export async function fetchCatalog(q: string, page: number, limit = 20) {
