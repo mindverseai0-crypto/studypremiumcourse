@@ -6,6 +6,7 @@ import {
   getHostForFolder,
   fetchSignedAsset,
 } from '@/lib/pw-cdn';
+import { lookupStoredSignature } from '@/lib/signature-store';
 
 export const dynamic = 'force-dynamic';
 
@@ -142,6 +143,10 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ path: s
   }
   if (!signedQuery) {
     signedQuery = getSignedQuery(folder);
+  }
+  if (!signedQuery) {
+    // persistent store (user-registered signatures, survives restarts)
+    signedQuery = lookupStoredSignature(folder);
   }
   if (!signedQuery) {
     // last resort — the owner-provided constant fallback table

@@ -211,6 +211,9 @@ const FALLBACK_FOLDER_SIGNATURES: Record<string, string> = {
     '?Signature=PRPN2G6cgfE7rk4sAaft2dq9fRbnrBdRvx2-jSdYvjQHcKml2yiV4g7sKE5Rgv86e13BlDX-xBkmS19SEpA-TV8Vg~YeT6sO-lEYLXkyU-KOq1XdJ2YUPMmrxbJYF4Db3yORDM23kGVc17o9QM5~5DapMH5OMB2z2c9AajcHQC7qZ~KF5TwgYM-~kmaM8WaztUKhLHBeZfmWN1dJCIWyshaNlyZm2s18vqFLT8KNCrfiGG414LNEdugx4ZsisLY5Uksozpr-knfd428syuZdARMpyUcmj4enndJMnpcARF2iUr-pEUfaSeX3kXC6j9E8JJSFqidsVPPBcMqxqRxWaw__&Key-Pair-Id=APKAXVKMENFCRKTG5XE2&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9kMWQzNHA4dno2M29pcS5jbG91ZGZyb250Lm5ldC9kZDMzMjZmYS0wZWNlLTRiZmUtODk3Mi0wMzJjZjJlNDZlMDQvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4OTU4OTU5OX0sIkRhdGVHcmVhdGVyVGhhbiI6eyJBV1M6RXBvY2hUaW1lIjoxNTc5ODk3NDA1fX19XX0_',
 };
 
+/** Folder ids with builtin fallback signatures (for store seeding). */
+export const FALLBACK_FOLDER_IDS: string[] = Object.keys(FALLBACK_FOLDER_SIGNATURES);
+
 /** Non-expired fallback signature for a folder, or null. */
 export function getFallbackSignedQuery(folder: string): string | null {
   const raw = FALLBACK_FOLDER_SIGNATURES[folder.trim()];

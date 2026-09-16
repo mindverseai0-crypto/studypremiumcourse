@@ -58,6 +58,9 @@ function PlayerInner() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [speedIdx, setSpeedIdx] = useState(2);
   const [copied, setCopied] = useState(false);
+  const [sigInput, setSigInput] = useState('');
+  const [sigBusy, setSigBusy] = useState(false);
+  const [sigMsg, setSigMsg] = useState('');
 
   // ------------------------------------------------------------------
   // Resolve the playable payload.
@@ -262,6 +265,46 @@ function PlayerInner() {
     else window.close();
   }, []);
 
+  // ------------------------------------------------------------------
+  // Recovery: register a pasted signed lecture URL and play it.
+  // ------------------------------------------------------------------
+  const submitSignature = useCallback(async () => {
+    const url = sigInput.trim();
+    if (!url || sigBusy) return;
+    setSigBusy(true);
+    setSigMsg('');
+    try {
+      const res = await fetch('/api/pw-register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const body = (await res.json()) as {
+        success?: boolean;
+        error?: string;
+        kind?: string;
+        relayUrl?: string;
+        clearKeys?: Record<string, string> | null;
+      };
+      if (!res.ok || !body.success || !body.relayUrl) {
+        throw new Error(body.error || 'This signed URL could not be registered.');
+      }
+      setError('');
+      setSigMsg('');
+      setSigInput('');
+      setKind((body.kind as PlayerKind) || 'mp4');
+      setSrc(body.relayUrl);
+      setClearKeys(body.clearKeys || null);
+      setPoster('');
+      setStatus('Ready to play');
+      setLoading(false);
+    } catch (e) {
+      setSigMsg(e instanceof Error ? e.message : 'Could not register this URL.');
+    } finally {
+      setSigBusy(false);
+    }
+  }, [sigInput, sigBusy]);
+
   // Auto-hide controls while playing
   useEffect(() => {
     scheduleHide();
@@ -335,6 +378,42 @@ function PlayerInner() {
             <i className="fas fa-video-slash" style={{ fontSize: '2rem', marginBottom: '10px' }}></i>
             <br />
             <span>{error}</span>
+            <div className="sig-recovery">
+              <div className="sig-recovery-title">
+                <i className="fas fa-key"></i> Have a signed lecture URL?
+              </div>
+              <p className="sig-recovery-hint">
+                Paste the FULL signed URL (…/master.mpd?Signature=…&amp;Key-Pair-Id=…&amp;Policy=…) to unlock
+                this stream. It is registered server-side and kept for future plays.
+              </p>
+              <input
+                className="sig-recovery-input"
+                type="url"
+                value={sigInput}
+                placeholder="https://…/master.mpd?Signature=…"
+                onChange={(e) => setSigInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void submitSignature();
+                }}
+              />
+              <button
+                className="sig-recovery-btn"
+                type="button"
+                onClick={() => void submitSignature()}
+                disabled={sigBusy || !sigInput.trim()}
+              >
+                {sigBusy ? (
+                  <>
+                    <i className="fas fa-spinner fa-spin"></i> Verifying…
+                  </>
+                ) : (
+                  <>
+                    <i className="fas fa-play"></i> Load Stream
+                  </>
+                )}
+              </button>
+              {sigMsg ? <div className="sig-recovery-msg">{sigMsg}</div> : null}
+            </div>
           </div>
         ) : null}
 

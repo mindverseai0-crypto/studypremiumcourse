@@ -26,6 +26,7 @@ import {
   getFallbackSignedQuery,
   fetchSignedAsset,
 } from "@/lib/pw-cdn";
+import { lookupStoredSignature } from "@/lib/signature-store";
 
 void lxAllBatches; // catalog lives in /api/batches
 
@@ -374,6 +375,8 @@ async function resolveSignedQuery(
     registerSignedFolder(folder, fb);
     return fb;
   }
+  const stored = lookupStoredSignature(folder);
+  if (stored) return stored;
   const cached = getSignedQuery(folder);
   return cached || "";
 }
@@ -804,7 +807,16 @@ export async function POST(request: NextRequest) {
         }
         try {
           const data = await resolveVideoPayload(childId, batchId, subjectId, vUrl, realVideoId);
-          if (!data) return NextResponse.json({ success: false }, { headers: CORS_HEADERS });
+          if (!data) {
+            return NextResponse.json(
+              {
+                success: false,
+                error:
+                  "Stream unavailable — every upstream signing source is gated for this batch. If you have a signed lecture URL, paste it below to unlock playback.",
+              },
+              { headers: CORS_HEADERS },
+            );
+          }
           return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
         } catch (e) {
           return NextResponse.json(

@@ -90,3 +90,16 @@
 .sb-live-root .live-dot { width: 7px; height: 7px; background: #fff; border-radius: 50%; animation: sbBlink 1s infinite; }
 @keyframes sbBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
 .sb-live-root .cta-btn { display: flex; align-items: center; justify-content: center; gap: 8px; background: #111827; color: #FFB800; border: none; padding: 12px 20px; border-radius: 10px; font-weight: 800; width: 100%; cursor: pointer; font-size: 0.95rem; margin-top: 14px; }
+
+/* --- signature recovery form (player error state) --- */
+.sb-player-root .error-box { max-width: 460px; }
+.sb-player-root .sig-recovery { margin-top: 14px; text-align: left; border-top: 1px solid rgba(239,68,68,0.35); padding-top: 12px; }
+.sb-player-root .sig-recovery-title { color: #fbbf24; font-size: 0.8rem; font-weight: 800; display: flex; align-items: center; gap: 6px; }
+.sb-player-root .sig-recovery-hint { color: rgba(255,255,255,0.75); font-size: 0.7rem; font-weight: 500; margin: 6px 0 10px; line-height: 1.45; }
+.sb-player-root .sig-recovery-input { width: 100%; min-height: 44px; background: rgba(17,24,39,0.9); border: 1px solid #374151; border-radius: 8px; color: #f9fafb; font-size: 0.72rem; padding: 8px 12px; outline: none; box-sizing: border-box; }
+.sb-player-root .sig-recovery-input:focus { border-color: #fbbf24; }
+.sb-player-root .sig-recovery-input::placeholder { color: #6b7280; }
+.sb-player-root .sig-recovery-btn { margin-top: 10px; width: 100%; min-height: 44px; background: #fbbf24; border: none; border-radius: 8px; color: #111827; font-weight: 800; font-size: 0.8rem; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px; transition: opacity 0.2s; }
+.sb-player-root .sig-recovery-btn:hover:not(:disabled) { opacity: 0.9; }
+.sb-player-root .sig-recovery-btn:disabled { opacity: 0.55; cursor: not-allowed; }
+.sb-player-root .sig-recovery-msg { margin-top: 8px; color: #fca5a5; font-size: 0.7rem; font-weight: 600; word-break: break-word; }

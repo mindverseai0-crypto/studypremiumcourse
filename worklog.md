@@ -292,3 +292,35 @@ Stage Summary:
 - Delta lane is now the DEFAULT upstream (delta → pearl → direct auto-fallback) and fully verified in-browser: manifest rewrite, stateless signature propagation, ClearKey decryption and deep seek all work
 - Folder dd3326fa-0ece-4bfe-8972-032cf2e46e04 is playable EVEN without a fresh per-video signature (fallback table); NOTE the fallback signature expires 2026-09-16T20:13Z (~2.7h from implementation time) — per-folder signatures for other lectures remain the gap; the upstream video-url API is still dead, so fresh owner-provided signed URLs per folder are still needed
 - Envs: PW_UPSTREAM_MODE (delta|pearl|direct, default delta), PW_DELTA_PLAY_API, PW_PROXY_ORIGIN (pearl), LECTURE_SIGN_URL (env signer)
+---
+Task ID: lectures-recovery-1
+Agent: main (Z.ai Code)
+Task: Diagnose "why lectures are not playing" + build permanent recovery pipeline
+
+Work Log:
+- Diagnosed root cause: EVERY upstream per-folder signing source is gated for most batches:
+  - learnxpw /api/video-url → {"success":false} (with session cookies too)
+  - learnxpw /api/get-video-url → "This Batch is unavailable. Please contact admin to add this batch." (Arjuna JEE 2027)
+  - video-detail.studyparcham.in (env signer) → {"success":false,"error":""}
+  - pw.studyparcham.in + studyparcham.in action APIs → "Secure Endpoint Not Mapped for action: parcham_vid"; pw_v2_list returns empty data for the failing subject/chapter
+  - pw.studyparcham.qzz.io (new owner domain found in studybee index.html) → unresponsive
+  - deltastudy.fun → browser-verify gate; apiserver only exposes /api/pi/play pass-through (signs nothing)
+  - studybee core.js → vm-obfuscated, static analysis dead end
+- Confirmed the dd3326fa-0ece-4bfe-8972-032cf2e46e04 lecture (user-provided signature) streams fine — hundreds of segment 200s in dev.log through the delta lane; the failing lecture (Permutations and Combinations 10, Arjuna JEE 2027) resolves its folder but has NO signature → parcham_vid returns success:false → player error.
+- Built src/lib/signature-store.ts: file-backed persistent signature store at db/pw-signatures.json
+  - parseSignedUrl(): accepts full signed URL / bare query; Policy Resource is source of truth for host+folder (wildcard * stripped); validates Signature+Key-Pair-Id+Policy, decodes expiry, rejects expired
+  - ensureSeeded(): auto-seeds store from pw-cdn FALLBACK_FOLDER_SIGNATURES on first use (expired entries skipped)
+  - lookupStoredSignature(folder): store lookup + re-hydration of the in-memory pw-cdn registry (survives restarts/TTL eviction)
+  - persistSignature(): atomic JSON write (tmp+rename), 5s read cache
+- Exported FALLBACK_FOLDER_IDS from pw-cdn.ts
+- New route /api/pw-register: POST {url}|{folder,signature} → parse/validate/persist → probes manifest through the delta→pearl→direct lane chain → for DASH extracts default_KID and resolves ClearKeys via lxOtp → returns {relayUrl, kind, clearKeys, manifestOk, exp}; GET lists registered folders (no raw signatures)
+- Wired lookupStoredSignature into /api/pw/[...path] route (path sig → registry → store → fallback) and into /api/data resolveSignedQuery (envSigner → fallback → store → registry)
+- Player recovery UI: error box now includes "Have a signed lecture URL?" form — paste URL → POST /api/pw-register → plays the returned relayUrl immediately (styles in player.css, 44px touch targets)
+- parcham_vid failure now returns an explanatory error message shown in the player
+- Fixed wildcard bug: Policy Resource "…/<folder>/*" no longer leaks "*" into subPath (was causing kind=mp4 + relay 400)
+
+Stage Summary:
+- Root cause: signature acquisition is externally gated for most batches — NOT a code regression; only user-provided folder signatures (currently dd3326fa) can play
+- New capability: paste a signed lecture URL in the player error state → registers server-side (persisted to db/pw-signatures.json, seeded from builtin fallbacks, survives restarts) → instant playback
+- E2E verified via agent-browser: failing lecture shows clear error + recovery form; pasting the dd3326fa signed URL → manifest probed OK, ClearKeys resolved, video PLAYED (readyState 4, currentTime advancing, real frames + subtitles, duration 1789s); 64 segment 200s in dev.log; home page regression-free (21 cards); lint clean
+- Store file db/pw-signatures.json currently holds dd3326fa (exp 1789589599, source manual)
