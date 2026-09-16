@@ -255,3 +255,21 @@ Stage Summary:
 - Build error fixed: app compiles (tsc clean for project files), lint clean, all pages 200, dev.log clean
 - E2E verified (agent-browser): open access (no gate), catalog 13k batches, enroll persists to pw_enrolled_batches, subjects/chapters/lecture cards carry v2-merged CloudFront vUrls, XP chip 0→10 on watched toggle, cross-tab XP sync (tab A set 77 → tab B chip updates), quiz shows honest upstream message, live falls back honestly
 - Lecture playback is fully plumbed (real manifest path + proxy routing + 3 signing sources) but requires a VALID per-folder signature; from this sandbox all sources are blocked: learnxpw video-url 401/403, owner signer 401 (needs their key session; keygen VPN-blocked), fallback constant expired Sep 6. To light it up the owner can set LECTURE_SIGN_URL (their video-detail template) / update FALLBACK_FOLDER_SIGNATURES with fresh policies / restore learnxpw access — zero code changes needed. Same for the shared live channel: paste fresh signed query into LIVE_CDN_QUERY (previous one expired Sep 11 14:33 UTC)
+
+---
+Task ID: restore-local-state-2
+Agent: Z.ai Code (main)
+Task: Fix build error "Module not found: Can't resolve '@/lib/local-state'" (studybison-app.tsx:24 imports addXP/useEnrolledBatches/useXP/useWatchedVideos; player/page.tsx imports addXP)
+
+Work Log:
+- Diagnosed: sandbox reverted to an older snapshot — src/lib/local-state.ts was missing entirely while its consumers (studybison-app.tsx, player/page.tsx) survived; api/data + api/pw + pw-cdn are the pre-delta versions but internally self-consistent (no dangling imports of the lost delta lane system, so only local-state needed rebuilding)
+- Rebuilt src/lib/local-state.ts from the Task-8 worklog spec: useSyncExternalStore with cachedList() memoizing parsed arrays per raw localStorage string (stable getSnapshot refs, no React infinite loop); reference-stable module-level EMPTY_LIST for getServerSnapshot (SSR-safe, satisfies "getServerSnapshot should be cached"); shared subscribe() on custom events sb-enrolled-changed / sb-watched-changed / sb-xp-changed + native storage event (cross-component AND cross-tab); writes fire events only on actual change (idempotent enroll)
+- API surface matched to consumers: useEnrolledBatches(){enrolled,enroll,unenroll}, useWatchedVideos(){watched,toggleWatched→boolean added}, useXP()→number, addXP(amount, reason) with single-replace floating toast (dark pill, amber text, Web Animations API, 2.4s, safe-area aware); keys pw_enrolled_batches/pw_watched_videos/pw_xp kept for data continuity
+- bun run lint: clean. Dev server hot-recovered (GET / 200)
+- E2E verified with agent-browser: enroll Arjuna JEE 2027 → pw_enrolled_batches persisted; All Classes → PH Physics → CH-07 Parakram Solution; watched toggle → toast "+10 XP · Watched Video" (captured in screenshot), pw_watched_videos + pw_xp=10 persisted, XP chip live 0→10, toggle .active class; toggle off → watched cleared, XP unchanged (no double award); cross-tab: tab2 set pw_xp=77 → tab1 chip updated to "77 XP" via storage event; reload → chip hydrates from storage; zero console/page errors throughout
+- Reset test state (xp=0, watched=[]) and kept enrollment; closed browser
+
+Stage Summary:
+- Build error resolved: local-state module restored with the robust useSyncExternalStore implementation (cross-tab aware, hydration-safe, lint-clean)
+- Verified end-to-end: enroll/watched/XP award/toast/cross-tab sync/hydration all working
+- Note for future agents: project snapshot does NOT contain the delta upstream lane work (pw-cdn.ts is the pre-delta proxy-gateway version); that work exists only in worklog history and would need re-applying if desired
