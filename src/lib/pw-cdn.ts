@@ -1,14 +1,22 @@
 // ============================================================================
-// PW CloudFront signed-folder registry (server-side only).
+// PW CloudFront signed-folder registry + upstream fetch lanes (server-side).
 //
 // Lectures are served through the SAME pipeline as the owner's production
 // site: a per-video folder signature from the upstream video-url API whose
 // Policy covers the WHOLE folder (…/<folder>/*) — manifests, init segments,
 // media segments and AES keys all resolve with the same query string.
 //
-// Assets are fetched through the proxy gateway
-//     https://proxy.studyparcham.in/{cf_host}/{path}{signature}
-// so our origin never needs direct egress to CloudFront.
+// Our origin reaches the signed CloudFront assets through ordered LANES
+// (see fetchSignedAsset below):
+//
+//   delta  — https://apiserver.deltastudy.fun/api/pi/play?url=<encoded URL>
+//            Heroku pass-through: the server fetches ANY valid signed
+//            CloudFront URL and returns the bytes. It signs nothing itself
+//            and its CORS is locked to deltastudy.fun, so it is usable
+//            ONLY server-side — exactly what this module is for.
+//   pearl  — https://proxy.studyparcham.in/{cf_host}/{path}{signature}
+//            the owner's proxy gateway.
+//   direct — straight to CloudFront from this origin.
 //
 // When /api/data resolves a video we register {folder -> signed query, host}
 // here; the /api/pw/[...path] relay serves every asset through our own
@@ -29,6 +37,90 @@ export const CLOUDFRONT_HOST = 'd1d34p8vz63oiq.cloudfront.net';
  */
 export function pwProxyOrigin(): string {
   return (process.env.PW_PROXY_ORIGIN || 'https://proxy.studyparcham.in').replace(/\/+$/, '');
+}
+
+// ---------------------------------------------------------------------------
+// Upstream lanes
+// ---------------------------------------------------------------------------
+
+export type UpstreamMode = 'delta' | 'pearl' | 'direct';
+
+/** First lane to try — env `PW_UPSTREAM_MODE`, default `delta`. */
+export function upstreamMode(): UpstreamMode {
+  const v = (process.env.PW_UPSTREAM_MODE || 'delta').toLowerCase().trim();
+  return v === 'pearl' || v === 'direct' ? (v as UpstreamMode) : 'delta';
+}
+
+/** Delta pass-through endpoint — env `PW_DELTA_PLAY_API` to override. */
+export function deltaPlayUrl(): string {
+  return (process.env.PW_DELTA_PLAY_API || 'https://apiserver.deltastudy.fun/api/pi/play').trim();
+}
+
+/** Full lane order: configured mode first, then the remaining ones. */
+function laneChain(): UpstreamMode[] {
+  const first = upstreamMode();
+  const rest: UpstreamMode[] = (['delta', 'pearl', 'direct'] as UpstreamMode[]).filter((m) => m !== first);
+  return [first, ...rest];
+}
+
+/** Concrete upstream URL for a lane. `path` = "<folder>/<asset…>" (pre-encoded). */
+function laneAssetUrl(lane: UpstreamMode, host: string, path: string, signedQuery: string): string {
+  const target = `https://${host}/${path}${signedQuery}`;
+  if (lane === 'direct') return target;
+  if (lane === 'pearl') return `${pwProxyOrigin()}/${host}/${path}${signedQuery}`;
+  return `${deltaPlayUrl()}?url=${encodeURIComponent(target)}`;
+}
+
+export interface FetchSignedOptions {
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+}
+
+/**
+ * Fetch a signed CloudFront asset trying each upstream lane in order.
+ * A lane wins when the fetch resolves with a non-403, non-5xx status; on
+ * network errors / 403 / 5xx the next lane is tried. Returns the first
+ * winning response, or the last response when every lane failed (a
+ * synthesized 502 if all lanes threw).
+ *
+ * `pathAfterHost` must be the percent-encoded path below the distribution
+ * root, e.g. "<folder>/dash/720/init.mp4". `signedQuery` starts with "?".
+ */
+export async function fetchSignedAsset(
+  host: string,
+  pathAfterHost: string,
+  signedQuery: string,
+  opts: FetchSignedOptions = {},
+): Promise<Response> {
+  const query = signedQuery.startsWith('?') ? signedQuery : signedQuery ? `?${signedQuery}` : '';
+  const lanes = laneChain();
+  let last: Response | null = null;
+  let lastErr: unknown = null;
+  for (const lane of lanes) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 60000);
+    try {
+      const res = await fetch(laneAssetUrl(lane, host, pathAfterHost, query), {
+        cache: 'no-store',
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36',
+          ...(opts.headers || {}),
+        },
+      });
+      clearTimeout(timer);
+      if (res.status !== 403 && res.status < 500) return res; // lane win
+      last = res; // genuine upstream failure — remember, try next lane
+    } catch (err) {
+      clearTimeout(timer);
+      lastErr = err;
+    }
+  }
+  if (last) return last;
+  return new Response(
+    JSON.stringify({ success: false, error: lastErr instanceof Error ? lastErr.message : 'All upstream lanes failed' }),
+    { status: 502, headers: { 'Content-Type': 'application/json' } },
+  );
 }
 
 export function registerSignedFolder(folder: string, signedQuery: string, host = ''): void {
@@ -112,6 +204,11 @@ const FALLBACK_FOLDER_SIGNATURES: Record<string, string> = {
   // Owner sample (proxy.studyparcham.in template) — folder-wide policy.
   'a558fffd-9f3f-4334-ac96-50c13dd2cfc7':
     'Signature=jNepjtfmz52QXRhnbc6fpfUzjhRJrHDPwrRYYh9crNIgJvqy3cmNSfCiNsaiPmQEHFa6EJ8tKNBPlUufLmbSNugAsyFjW5yRJixcxLF0QWcjvEy~lUd9dPNXMZ0ZCGq7cCiOjxPn200yPolUMpQlfnzVTks3~cAFFiwUZS9dvZ5ssTOpmIJoDsuCqbvEqnYl1-JWIHuRfGO3sVAjl1Mm-cEbbavfCc5Lavgwa9YieCV~opvKuLW8HqEytkZE2yzjZkVEughljmlL-jFIonuSNUNZrhlRtg7aX31xjENZ4lRj2-EqGoXezLr4WDzTqilIHV9pZ~uWDrtlAqlD0efXGg__&Key-Pair-Id=APKAXVKMENFCRKTG5XE2&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9kMWQzNHA4dno2M29pcS5jbG91ZGZyb250Lm5ldC9hNTU4ZmZmZC05ZjNmLTQzMzQtYWM5Ni01MGMxM2RkMmNmYzcvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4ODcyNjMyN30sIkRhdGVHcmVhdGVyVGhhbiI6eyJBV1M6RXBvY2hUaW1lIjo1NzY2ODAxMX19fV19',
+  // Owner-provided sample (delta lane era) — folder-wide policy, expires
+  // epoch 1789589599 (2026-09-16). Probed 200 for master.mpd, init.mp4 and
+  // media segments through apiserver.deltastudy.fun/api/pi/play.
+  'dd3326fa-0ece-4bfe-8972-032cf2e46e04':
+    '?Signature=PRPN2G6cgfE7rk4sAaft2dq9fRbnrBdRvx2-jSdYvjQHcKml2yiV4g7sKE5Rgv86e13BlDX-xBkmS19SEpA-TV8Vg~YeT6sO-lEYLXkyU-KOq1XdJ2YUPMmrxbJYF4Db3yORDM23kGVc17o9QM5~5DapMH5OMB2z2c9AajcHQC7qZ~KF5TwgYM-~kmaM8WaztUKhLHBeZfmWN1dJCIWyshaNlyZm2s18vqFLT8KNCrfiGG414LNEdugx4ZsisLY5Uksozpr-knfd428syuZdARMpyUcmj4enndJMnpcARF2iUr-pEUfaSeX3kXC6j9E8JJSFqidsVPPBcMqxqRxWaw__&Key-Pair-Id=APKAXVKMENFCRKTG5XE2&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9kMWQzNHA4dno2M29pcS5jbG91ZGZyb250Lm5ldC9kZDMzMjZmYS0wZWNlLTRiZmUtODk3Mi0wMzJjZjJlNDZlMDQvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4OTU4OTU5OX0sIkRhdGVHcmVhdGVyVGhhbiI6eyJBV1M6RXBvY2hUaW1lIjoxNTc5ODk3NDA1fX19XX0_',
 };
 
 /** Non-expired fallback signature for a folder, or null. */
@@ -121,7 +218,10 @@ export function getFallbackSignedQuery(folder: string): string | null {
   const m = raw.match(/Policy=([^&]+)/);
   if (m) {
     try {
-      const policy = JSON.parse(Buffer.from(m[1], 'base64').toString('utf8')) as {
+      // Some signers pad base64url non-canonically (e.g. trailing '_' bits)
+      // which decodes to junk bytes after the JSON — trim to the object.
+      const decoded = Buffer.from(m[1], 'base64').toString('utf8');
+      const policy = JSON.parse(decoded.slice(decoded.indexOf('{'), decoded.lastIndexOf('}') + 1)) as {
         Statement?: Array<{ Condition?: { DateLessThan?: { 'AWS:EpochTime'?: number } } }>;
       };
       const now = Math.floor(Date.now() / 1000);

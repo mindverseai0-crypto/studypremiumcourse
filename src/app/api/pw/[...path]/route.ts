@@ -2,30 +2,33 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   CLOUDFRONT_HOST,
   getSignedQuery,
+  getFallbackSignedQuery,
   getHostForFolder,
-  pwProxyOrigin,
+  fetchSignedAsset,
 } from '@/lib/pw-cdn';
 
 export const dynamic = 'force-dynamic';
 
 // ---------------------------------------------------------------------------
 // GET /api/pw/<folder>/<file...>
-// GET /api/pw/<folder>/s/<sig>/<file...>      ← stateless form
+// GET /api/pw/<folder>/s/<sig>/<file...>      ← stateless signature in path
 // GET /api/pw/h/<host>/<folder>/...           ← explicit distribution host
 //
 // Same-origin relay for the REAL PW CloudFront media (signed per video
 // folder by the upstream video-url API).
 //
-// Upstream fetches go through the owner's proxy gateway (the same API the
-// production site uses for lectures):
-//     https://proxy.studyparcham.in/{cf_host}/{path}{signature}
-// Set PW_CDN_DIRECT=1 to bypass the gateway and hit CloudFront directly.
+// Upstream fetches go through the ordered lane chain in pw-cdn.ts:
+//   delta (apiserver.deltastudy.fun pass-through) → pearl
+//   (proxy.studyparcham.in) → direct CloudFront. The first lane that
+// returns a non-403/non-5xx response wins. PW_UPSTREAM_MODE picks the
+// first lane (default: delta).
 //
-// The DASH manifests use RELATIVE segment URLs, so the signature is carried
-// in the path (`/s/<base64url-of-query>/`) and every relative segment the
-// player resolves automatically flows back through this route with its
-// signature. The in-memory registry (pw-cdn) is kept as a fallback for URLs
-// without the path signature.
+// The DASH manifests use ABSOLUTE folder-level <BaseURL>s, so rewriteMpd()
+// points them back at this route and the signature is carried statelessly
+// in the path (`/s/<base64url-of-query>/`); every relative segment the
+// player resolves automatically flows back through here. The in-memory
+// registry (pw-cdn) and the fallback signature table are consulted for
+// URLs without a path signature.
 //
 //   master.mpd / main.m3u8 → playlist rewritten to this same route
 //   everything else        → raw asset bytes (init.mp4, segments, .ts, enc.key)
@@ -36,18 +39,14 @@ const SAFE_SEGMENT = /^[A-Za-z0-9._-]+$/;
 const SAFE_HOST = /^[a-z0-9.-]+\.cloudfront\.net$/i;
 const SAFE_SIG = /^[A-Za-z0-9_-]{8,}$/;
 
-function buildUpstreamUrl(host: string, folder: string, asset: string[], query: string): string | null {
+/** "<folder>/<asset…>" percent-encoded path below the distribution root. */
+function buildAssetPath(folder: string, asset: string[]): string | null {
   if (asset.length === 0) return null;
   if (!/^[a-f0-9-]{16,}$/i.test(folder)) return null;
-  if (!SAFE_HOST.test(host)) return null;
   for (const seg of asset) {
     if (!SAFE_SEGMENT.test(seg)) return null; // no traversal, no url tricks
   }
-  const path = [folder, ...asset].map(encodeURIComponent).join('/');
-  if (process.env.PW_CDN_DIRECT === '1') {
-    return `https://${host}/${path}${query}`;
-  }
-  return `${pwProxyOrigin()}/${host}/${path}${query}`;
+  return [folder, ...asset].map(encodeURIComponent).join('/');
 }
 
 /** Rewrite every playlist URI (absolute or relative) to our relay route. */
@@ -92,6 +91,19 @@ function joinUri(base: string, uri: string, host: string): string {
   return `${base}/${out.map(encodeURIComponent).join('/')}`;
 }
 
+/**
+ * DASH manifests from shaka-packager carry ABSOLUTE folder-level BaseURLs
+ * (https://<dist>/<folder>/) at MPD and AdaptationSet level. Left as-is the
+ * player would resolve segments straight against the unsigned distribution
+ * (403). Rewrite every such occurrence to our relay base so each segment
+ * flows back through this route with its signature in the path.
+ */
+function rewriteMpd(body: string, base: string, host: string, folder: string): string {
+  const esc = host.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const re = new RegExp(`https?://${esc}/${folder}/`, 'gi');
+  return body.replace(re, `${base}/`);
+}
+
 export async function GET(request: NextRequest, ctx: { params: Promise<{ path: string[] }> }) {
   const { path } = await ctx.params;
   const parts = (path || []).map((p) => decodeURIComponent(p));
@@ -132,14 +144,23 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ path: s
     signedQuery = getSignedQuery(folder);
   }
   if (!signedQuery) {
+    // last resort — the owner-provided constant fallback table
+    const fb = getFallbackSignedQuery(folder);
+    if (fb) {
+      signedQuery = fb;
+      // propagate it statelessly for every segment the player resolves
+      sigSegment = Buffer.from(fb, 'utf8').toString('base64url');
+    }
+  }
+  if (!signedQuery) {
     return NextResponse.json(
       { success: false, error: 'Unknown or expired stream. Reload the lecture.' },
       { status: 403 },
     );
   }
 
-  const upstream = buildUpstreamUrl(host, folder, asset, signedQuery);
-  if (!upstream) {
+  const assetPath = buildAssetPath(folder, asset);
+  if (!assetPath) {
     return NextResponse.json({ success: false, error: 'Bad path' }, { status: 400 });
   }
 
@@ -148,61 +169,44 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ path: s
   const isManifest = /\.mpd$/i.test(fileName);
 
   const range = request.headers.get('range');
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 60000);
-  try {
-    const upstreamRes = await fetch(upstream, {
-      cache: 'no-store',
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36',
-        ...(range ? { Range: range } : {}),
-      },
-    });
+  const upstreamRes = await fetchSignedAsset(host, assetPath, signedQuery, {
+    headers: range ? { Range: range } : undefined,
+    timeoutMs: 60000,
+  });
 
-    if (!upstreamRes.ok) {
-      clearTimeout(timer);
-      return NextResponse.json(
-        { success: false, error: `Upstream ${upstreamRes.status}` },
-        { status: upstreamRes.status === 403 ? 403 : 502 },
-      );
-    }
-
-    if (isPlaylist || isManifest) {
-      const text = await upstreamRes.text();
-      clearTimeout(timer);
-      const hostSeg = host === CLOUDFRONT_HOST ? '' : '/h/' + host;
-      const base = sigSegment
-        ? `/api/pw${hostSeg}/${folder}/s/${sigSegment}`
-        : `/api/pw${hostSeg}/${folder}`;
-      const body = isPlaylist ? rewritePlaylist(text, base, host) : text;
-      return new NextResponse(body, {
-        status: 200,
-        headers: {
-          'Content-Type': isPlaylist ? 'application/vnd.apple.mpegurl' : 'application/dash+xml',
-          'Cache-Control': 'no-store',
-          'Access-Control-Allow-Origin': '*',
-        },
-      });
-    }
-
-    // binary asset → stream through
-    const headers = new Headers();
-    const passthrough = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag'];
-    for (const h of passthrough) {
-      const v = upstreamRes.headers.get(h);
-      if (v) headers.set(h, v);
-    }
-    if (!headers.has('content-type')) headers.set('content-type', 'application/octet-stream');
-    headers.set('Cache-Control', 'public, max-age=86400');
-    headers.set('Access-Control-Allow-Origin', '*');
-    clearTimeout(timer);
-    return new NextResponse(upstreamRes.body, { status: upstreamRes.status, headers });
-  } catch (e) {
-    clearTimeout(timer);
+  if (!upstreamRes.ok) {
     return NextResponse.json(
-      { success: false, error: e instanceof Error ? e.message : 'Relay failed' },
-      { status: 502 },
+      { success: false, error: `Upstream ${upstreamRes.status}` },
+      { status: upstreamRes.status === 403 ? 403 : 502 },
     );
   }
+
+  if (isPlaylist || isManifest) {
+    const text = await upstreamRes.text();
+    const hostSeg = host === CLOUDFRONT_HOST ? '' : '/h/' + host;
+    // Always carry a stateless signature segment so segments need no registry
+    const sigSeg = sigSegment ?? Buffer.from(signedQuery, 'utf8').toString('base64url');
+    const base = `/api/pw${hostSeg}/${folder}/s/${sigSeg}`;
+    const body = isPlaylist ? rewritePlaylist(text, base, host) : rewriteMpd(text, base, host, folder);
+    return new NextResponse(body, {
+      status: 200,
+      headers: {
+        'Content-Type': isPlaylist ? 'application/vnd.apple.mpegurl' : 'application/dash+xml',
+        'Cache-Control': 'no-store',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
+  }
+
+  // binary asset → stream through
+  const headers = new Headers();
+  const passthrough = ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag'];
+  for (const h of passthrough) {
+    const v = upstreamRes.headers.get(h);
+    if (v) headers.set(h, v);
+  }
+  if (!headers.has('content-type')) headers.set('content-type', 'application/octet-stream');
+  headers.set('Cache-Control', 'public, max-age=86400');
+  headers.set('Access-Control-Allow-Origin', '*');
+  return new NextResponse(upstreamRes.body, { status: upstreamRes.status, headers });
 }

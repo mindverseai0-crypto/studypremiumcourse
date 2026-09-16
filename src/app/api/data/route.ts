@@ -24,6 +24,7 @@ import {
   subPathFromUrl,
   getSignedQuery,
   getFallbackSignedQuery,
+  fetchSignedAsset,
 } from "@/lib/pw-cdn";
 
 void lxAllBatches; // catalog lives in /api/batches
@@ -419,18 +420,15 @@ async function resolveVideoPayload(
       if (!relay) return null;
       let clearKeys: Record<string, string> | null = null;
       try {
-        const upstreamBase = process.env.PW_CDN_DIRECT === "1" ? "" : "https://proxy.studyparcham.in/";
-        const abs = upstreamBase
-          ? `${upstreamBase}${new URL(url).host}${new URL(url).pathname}${relay.signedQuery}`
-          : `${url}${relay.signedQuery}`;
-        const controller = new AbortController();
-        const timer = setTimeout(() => controller.abort(), 30000);
-        const mpdRes = await fetch(abs, {
-          cache: "no-store",
-          signal: controller.signal,
-          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
-        });
-        clearTimeout(timer);
+        // Probe the manifest through the same upstream lane chain the relay
+        // uses (delta → pearl → direct) to extract the ClearKey KID.
+        const u = new URL(url);
+        const mpdRes = await fetchSignedAsset(
+          u.host,
+          u.pathname.replace(/^\/+/, ""),
+          relay.signedQuery,
+          { timeoutMs: 30000 },
+        );
         if (mpdRes.ok) {
           const text = await mpdRes.text();
           const kidMatch = text.match(/default_KID="([0-9a-fA-F-]+)"/);
