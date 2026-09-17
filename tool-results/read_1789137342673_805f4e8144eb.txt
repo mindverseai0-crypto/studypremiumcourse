@@ -1,0 +1,1077 @@
+     1→     1→'use client';
+     2→     2→
+     3→     3→// ============================================================================
+     4→     4→// Study Bison — main SPA (rebranded from the studybee pro clone)
+     5→     5→// Views: All Courses (home) / Study Dashboard / All Classes / Chapters /
+     6→     6→// Content / All Tests. Every content action is backed by the REAL PW data
+     7→     7→// relayed from the LearnxPW upstream (batches, subjects, chapters, lectures,
+     8→     8→// notes & DPP PDFs, tests, live schedule).
+     9→     9→// ============================================================================
+    10→    10→
+    11→    11→import { useCallback, useEffect, useRef, useState } from 'react';
+    12→    12→import {
+    13→    13→  api,
+    14→    14→  fetchCatalog,
+    15→    15→  imageUrl,
+    16→    16→  BatchCatalogItem,
+    17→    17→  BatchDetailPublic,
+    18→    18→  BatchSubjectPublic,
+    19→    19→  ChapterItemPublic,
+    20→    20→  ContentNodePublic,
+    21→    21→  ScheduleEventPublic,
+    22→    22→  TestItemPublic,
+    23→    23→} from '@/lib/api-client';
+    24→    24→import { addXP, useEnrolledBatches, useXP, useWatchedVideos } from '@/lib/local-state';
+    25→    25→
+    26→    26→type ViewId = 'home-view' | 'study-view' | 'all-classes-view' | 'chapters-view' | 'content-view' | 'all-tests-view';
+    27→    27→
+    28→    28→interface SubjectRef { id: string; internalId: string; name: string; masterId: string; batchSubjectId: string }
+    29→    29→interface TopicRef { id: string; name: string }
+    30→    30→interface AttachmentRow { title: string; url: string }
+    31→    31→interface DppMeta {
+    32→    32→  testId: string;
+    33→    33→  scheduleId: string;
+    34→    34→  subjectId: string;
+    35→    35→  name: string;
+    36→    36→}
+    37→    37→
+    38→    38→const DEFAULT_THUMB = 'https://store.pw.live/footer-logo.svg';
+    39→    39→
+    40→    40→export default function StudyBisonApp() {
+    41→    41→  // ---------------- global nav ----------------
+    42→    42→  const [view, setView] = useState<ViewId>('home-view');
+    43→    43→  const [sidebarOpen, setSidebarOpen] = useState(false);
+    44→    44→
+    45→    45→  // ---------------- home / catalog ----------------
+    46→    46→  const [batches, setBatches] = useState<BatchCatalogItem[]>([]);
+    47→    47→  const [page, setPage] = useState(1);
+    48→    48→  const [hasMore, setHasMore] = useState(false);
+    49→    49→  const [searchTerm, setSearchTerm] = useState('');
+    50→    50→  const [searching, setSearching] = useState(false);
+    51→    51→  const [catalogError, setCatalogError] = useState('');
+    52→    52→  const searchTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+    53→    53→  const debounceTerm = useRef('');
+    54→    54→
+    55→    55→  // ---------------- enrollment ----------------
+    56→    56→  const { enrolled, enroll, unenroll } = useEnrolledBatches();
+    57→    57→  const { watched, toggleWatched } = useWatchedVideos();
+    58→    58→  const xp = useXP();
+    59→    59→  const batchDetailCache = useRef<Map<string, BatchDetailPublic>>(new Map());
+    60→    60→
+    61→    61→  // ---------------- study ----------------
+    62→    62→  const [currentBatchId, setCurrentBatchId] = useState<string | null>(null);
+    63→    63→  const [enrolledDetails, setEnrolledDetails] = useState<BatchDetailPublic[]>([]);
+    64→    64→  const [events, setEvents] = useState<ScheduleEventPublic[]>([]);
+    65→    65→  const [eventsLoading, setEventsLoading] = useState(false);
+    66→    66→
+    67→    67→  // ---------------- classes / chapters / content ----------------
+    68→    68→  const [subjects, setSubjects] = useState<BatchSubjectPublic[]>([]);
+    69→    69→  const [subjectsLoading, setSubjectsLoading] = useState(false);
+    70→    70→  const [currentSubject, setCurrentSubject] = useState<SubjectRef | null>(null);
+    71→    71→  const [chaptersTab, setChaptersTab] = useState<'UNITS' | 'STUDY_MATERIAL'>('UNITS');
+    72→    72→  const [chapters, setChapters] = useState<ChapterItemPublic[]>([]);
+    73→    73→  const [chaptersLoading, setChaptersLoading] = useState(false);
+    74→    74→  const [currentTopic, setCurrentTopic] = useState<TopicRef | null>(null);
+    75→    75→  const [contentTab, setContentTab] = useState('ALL');
+    76→    76→  const [contentNodes, setContentNodes] = useState<ContentNodePublic[]>([]);
+    77→    77→  const [dppItems, setDppItems] = useState<TestItemPublic[]>([]);
+    78→    78→  const [contentLoading, setContentLoading] = useState(false);
+    79→    79→
+    80→    80→  // ---------------- tests ----------------
+    81→    81→  const [tests, setTests] = useState<TestItemPublic[]>([]);
+    82→    82→  const [testsLoading, setTestsLoading] = useState(false);
+    83→    83→
+    84→    84→  // ---------------- resources tab ----------------
+    85→    85→  const [resourcesTab, setResourcesTab] = useState<'subjects' | 'resources'>('subjects');
+    86→    86→  const [resourceTopics, setResourceTopics] = useState<ChapterItemPublic[]>([]);
+    87→    87→  const [resourcesLoading, setResourcesLoading] = useState(false);
+    88→    88→
+    89→    89→  // ---------------- modals ----------------
+    90→    90→  const [batchInfoOpen, setBatchInfoOpen] = useState(false);
+    91→    91→  const [batchInfo, setBatchInfo] = useState<BatchDetailPublic | null>(null);
+    92→    92→  const [batchInfoLoading, setBatchInfoLoading] = useState(false);
+    93→    93→
+    94→    94→  const [notesOpen, setNotesOpen] = useState(false);
+    95→    95→  const [notesLoading, setNotesLoading] = useState(false);
+    96→    96→  const [noteRows, setNoteRows] = useState<AttachmentRow[]>([]);
+    97→    97→
+    98→    98→  const [dppOpen, setDppOpen] = useState(false);
+    99→    99→  const [dppMeta, setDppMeta] = useState<DppMeta | null>(null);
+   100→   100→
+   101→   101→  const [testFrame, setTestFrame] = useState<{ open: boolean; url: string; title: string }>({ open: false, url: '', title: 'Test Attempt' });
+   102→   102→
+   103→   103→  const [instructions, setInstructions] = useState<{ open: boolean; loading: boolean; title: string; html: string }>({ open: false, loading: false, title: '', html: '' });
+   104→   104→
+   105→   105→  // ==================================================================
+   106→   106→  // NAV
+   107→   107→  // ==================================================================
+   108→   108→  const nav = useCallback((v: ViewId) => {
+   109→   109→    setView(v);
+   110→   110→    setSidebarOpen(false);
+   111→   111→    window.scrollTo(0, 0);
+   112→   112→  }, []);
+   113→   113→
+   114→   114→  // ==================================================================
+   115→   115→  // CATALOG (home view)
+   116→   116→  // ==================================================================
+   117→   117→  const loadCatalog = useCallback(async (q: string, p: number, isNew: boolean) => {
+   118→   118→    try {
+   119→   119→      if (isNew) {
+   120→   120→        setSearching(true);
+   121→   121→        setBatches([]);
+   122→   122→      }
+   123→   123→      setCatalogError('');
+   124→   124→      const res = await fetchCatalog(q, p, 20);
+   125→   125→      setBatches((prev) => (isNew ? res.data : [...prev, ...res.data]));
+   126→   126→      setHasMore(res.hasMore);
+   127→   127→      setPage(p);
+   128→   128→    } catch {
+   129→   129→      setCatalogError('Failed to load batches.');
+   130→   130→    } finally {
+   131→   131→      setSearching(false);
+   132→   132→    }
+   133→   133→  }, []);
+   134→   134→
+   135→   135→  useEffect(() => {
+   136→   136→    loadCatalog('', 1, true);
+   137→   137→  }, [loadCatalog]);
+   138→   138→
+   139→   139→  const handleSearchInput = (value: string) => {
+   140→   140→    setSearchTerm(value);
+   141→   141→    debounceTerm.current = value;
+   142→   142→    if (searchTimeout.current) clearTimeout(searchTimeout.current);
+   143→   143→    searchTimeout.current = setTimeout(() => {
+   144→   144→      loadCatalog(debounceTerm.current, 1, true);
+   145→   145→    }, 500);
+   146→   146→  };
+   147→   147→
+   148→   148→  const loadNextPage = () => {
+   149→   149→    loadCatalog(searchTerm, page + 1, false);
+   150→   150→  };
+   151→   151→
+   152→   152→  /** Catalog card click — open the real-data batch detail sheet. */
+   153→   153→  const openCatalogInfo = async (b: BatchCatalogItem) => {
+   154→   154→    setBatchInfoOpen(true);
+   155→   155→    setBatchInfoLoading(true);
+   156→   156→    setBatchInfo(b);
+   157→   157→    const res = await api.batchDetail(b._id);
+   158→   158→    if (res.success && res.data) setBatchInfo(res.data);
+   159→   159→    setBatchInfoLoading(false);
+   160→   160→  };
+   161→   161→
+   162→   162→  const enrollInBatch = (batchId: string) => {
+   163→   163→    enroll(batchId);
+   164→   164→    setCurrentBatchId(batchId);
+   165→   165→    setBatchInfoOpen(false);
+   166→   166→    nav('study-view');
+   167→   167→  };
+   168→   168→
+   169→   169→  const studyBatch = (batchId: string) => {
+   170→   170→    setBatchInfoOpen(false);
+   171→   171→    setCurrentBatchId(batchId);
+   172→   172→    nav('study-view');
+   173→   173→  };
+   174→   174→
+   175→   175→  // ==================================================================
+   176→   176→  // STUDY DASHBOARD
+   177→   177→  // ==================================================================
+   178→   178→  const refreshEnrolledDetails = useCallback(async () => {
+   179→   179→    const results: BatchDetailPublic[] = [];
+   180→   180→    for (const id of enrolled) {
+   181→   181→      const cached = batchDetailCache.current.get(id);
+   182→   182→      if (cached) {
+   183→   183→        results.push(cached);
+   184→   184→        continue;
+   185→   185→      }
+   186→   186→      const res = await api.batchDetail(id);
+   187→   187→      if (res.success && res.data) {
+   188→   188→        batchDetailCache.current.set(id, res.data);
+   189→   189→        results.push(res.data);
+   190→   190→      }
+   191→   191→    }
+   192→   192→    setEnrolledDetails(results);
+   193→   193→    setCurrentBatchId((cur) => {
+   194→   194→      if (cur && results.some((r) => r._id === cur)) return cur;
+   195→   195→      return results.length > 0 ? results[0]._id : null;
+   196→   196→    });
+   197→   197→  }, [enrolled]);
+   198→   198→
+   199→   199→  useEffect(() => {
+   200→   200→    refreshEnrolledDetails();
+   201→   201→  }, [refreshEnrolledDetails]);
+   202→   202→
+   203→   203→  const loadEvents = useCallback(async (batchId: string) => {
+   204→   204→    setEventsLoading(true);
+   205→   205→    const res = await api.todaySchedule(batchId);
+   206→   206→    setEvents(res.success && res.data ? res.data : []);
+   207→   207→    setEventsLoading(false);
+   208→   208→  }, []);
+   209→   209→
+   210→   210→  useEffect(() => {
+   211→   211→    if (currentBatchId) loadEvents(currentBatchId);
+   212→   212→    else setEvents([]);
+   213→   213→  }, [currentBatchId, loadEvents]);
+   214→   214→
+   215→   215→  const currentBatch = enrolledDetails.find((b) => b._id === currentBatchId) || null;
+   216→   216→
+   217→   217→  // ==================================================================
+   218→   218→  // ALL CLASSES — SUBJECTS & RESOURCES
+   219→   219→  // ==================================================================
+   220→   220→  const loadSubjects = useCallback(async (batchId: string) => {
+   221→   221→    setSubjectsLoading(true);
+   222→   222→    // Batch detail carries the real subject mapping (slug-addressed).
+   223→   223→    const res = await api.batchDetail(batchId);
+   224→   224→    if (res.success && res.data) {
+   225→   225→      batchDetailCache.current.set(batchId, res.data);
+   226→   226→      setSubjects(res.data.subjects || []);
+   227→   227→    } else {
+   228→   228→      setSubjects([]);
+   229→   229→    }
+   230→   230→    setSubjectsLoading(false);
+   231→   231→  }, []);
+   232→   232→
+   233→   233→  const loadResources = useCallback(async (batchId: string) => {
+   234→   234→    setResourcesLoading(true);
+   235→   235→    const res = await api.resourceTopics(batchId, '');
+   236→   236→    const topics = res.success && res.data ? (res.data as unknown as { data?: ChapterItemPublic[] }).data || [] : [];
+   237→   237→    setResourceTopics(topics);
+   238→   238→    setResourcesLoading(false);
+   239→   239→  }, []);
+   240→   240→
+   241→   241→  const openAllClasses = () => {
+   242→   242→    setResourcesTab('subjects');
+   243→   243→    nav('all-classes-view');
+   244→   244→    if (currentBatchId) loadSubjects(currentBatchId);
+   245→   245→  };
+   246→   246→
+   247→   247→  const switchClassesTab = (tab: 'subjects' | 'resources') => {
+   248→   248→    setResourcesTab(tab);
+   249→   249→    if (tab === 'subjects' && currentBatchId) loadSubjects(currentBatchId);
+   250→   250→    if (tab === 'resources' && currentBatchId) loadResources(currentBatchId);
+   251→   251→  };
+   252→   252→
+   253→   253→  // ==================================================================
+   254→   254→  // CHAPTERS
+   255→   255→  // ==================================================================
+   256→   256→  const loadChaptersList = useCallback(async (subjectId: string, tagType: 'UNITS' | 'STUDY_MATERIAL') => {
+   257→   257→    if (!currentBatchId) return;
+   258→   258→    setChaptersLoading(true);
+   259→   259→    const res = await api.subjectTopics(currentBatchId, subjectId, tagType);
+   260→   260→    const list = res.success && res.data ? (res.data as unknown as { data?: ChapterItemPublic[] }).data || [] : [];
+   261→   261→    setChapters(list);
+   262→   262→    setChaptersLoading(false);
+   263→   263→  }, [currentBatchId]);
+   264→   264→
+   265→   265→  const openSubject = (sub: BatchSubjectPublic) => {
+   266→   266→    setCurrentSubject({
+   267→   267→      id: sub.subjectId || sub._id,
+   268→   268→      internalId: sub.subjectId || sub._id,
+   269→   269→      name: sub.subject,
+   270→   270→      masterId: sub.masterId || '',
+   271→   271→      batchSubjectId: sub.batchSubjectId || '',
+   272→   272→    });
+   273→   273→    setChaptersTab('UNITS');
+   274→   274→    nav('chapters-view');
+   275→   275→    loadChaptersList(sub.subjectId || sub._id, 'UNITS');
+   276→   276→  };
+   277→   277→
+   278→   278→  const switchChaptersTab = (tagType: 'UNITS' | 'STUDY_MATERIAL') => {
+   279→   279→    setChaptersTab(tagType);
+   280→   280→    if (currentSubject) loadChaptersList(currentSubject.id, tagType);
+   281→   281→  };
+   282→   282→
+   283→   283→  // ==================================================================
+   284→   284→  // CONTENT
+   285→   285→  // ==================================================================
+   286→   286→  const loadContent = useCallback(async (subjectId: string, tagId: string, filter: string) => {
+   287→   287→    if (!currentBatchId) return;
+   288→   288→    setContentLoading(true);
+   289→   289→    if (filter === 'DPP_TEST') {
+   290→   290→      const subject = currentSubject;
+   291→   291→      const res = await api.dppList(currentBatchId, subject?.batchSubjectId || '', tagId);
+   292→   292→      const list = res.success && res.data ? (res.data as unknown as { data?: TestItemPublic[] }).data || [] : [];
+   293→   293→      setDppItems(list);
+   294→   294→      setContentNodes([]);
+   295→   295→    } else {
+   296→   296→      const res = await api.scheduleContent(currentBatchId, subjectId, tagId, filter);
+   297→   297→      const nodes = res.success && res.data ? (res.data as ContentNodePublic[]) : [];
+   298→   298→      setContentNodes(nodes);
+   299→   299→      setDppItems([]);
+   300→   300→    }
+   301→   301→    setContentLoading(false);
+   302→   302→  }, [currentBatchId, currentSubject]);
+   303→   303→
+   304→   304→  const openTopic = (t: ChapterItemPublic) => {
+   305→   305→    setCurrentTopic({ id: t._id, name: t.name });
+   306→   306→    setContentTab('ALL');
+   307→   307→    nav('content-view');
+   308→   308→    if (currentSubject) loadContent(currentSubject.id, t._id, 'ALL');
+   309→   309→  };
+   310→   310→
+   311→   311→  const openResourceTopic = (t: ChapterItemPublic) => {
+   312→   312→    if (!currentSubject) return;
+   313→   313→    setCurrentTopic({ id: t._id, name: t.name });
+   314→   314→    setContentTab('ALL');
+   315→   315→    nav('content-view');
+   316→   316→    loadContent(currentSubject.id, t._id, 'ALL');
+   317→   317→  };
+   318→   318→
+   319→   319→  const filterContentTab = (filter: string) => {
+   320→   320→    setContentTab(filter);
+   321→   321→    if (currentSubject && currentTopic) loadContent(currentSubject.id, currentTopic.id, filter);
+   322→   322→  };
+   323→   323→
+   324→   324→  // ==================================================================
+   325→   325→  // TESTS
+   326→   326→  // ==================================================================
+   327→   327→  const openAllTests = () => {
+   328→   328→    nav('all-tests-view');
+   329→   329→    if (!currentBatchId) return;
+   330→   330→    setTestsLoading(true);
+   331→   331→    api.testList(currentBatchId).then((res) => {
+   332→   332→      setTests(res.success && res.data ? res.data : []);
+   333→   333→      setTestsLoading(false);
+   334→   334→    }).catch(() => {
+   335→   335→      setTests([]);
+   336→   336→      setTestsLoading(false);
+   337→   337→    });
+   338→   338→  };
+   339→   339→
+   340→   340→  const openInstructions = async (t: TestItemPublic) => {
+   341→   341→    if (!currentBatchId) return;
+   342→   342→    setInstructions({ open: true, loading: true, title: t.name || 'Test', html: '' });
+   343→   343→    const res = await api.testDetail(t._id, currentBatchId);
+   344→   344→    const d = (res.data || {}) as Record<string, unknown>;
+   345→   345→    // upstream instructions arrive as {en: "<html>"} or a plain html string
+   346→   346→    const pick = (v: unknown): string => {
+   347→   347→      if (typeof v === 'string') return v;
+   348→   348→      if (v && typeof v === 'object') return String((v as { en?: string }).en || '');
+   349→   349→      return '';
+   350→   350→    };
+   351→   351→    const raw = pick(d.multiGeneralInstructions) || pick(d.generalInstructions);
+   352→   352→    const html = raw.replace(/<script[\s\S]*?<\/script>/gi, '');
+   353→   353→    setInstructions({ open: true, loading: false, title: t.name || 'Test', html: html || '<p>No instructions available.</p>' });
+   354→   354→  };
+   355→   355→
+   356→   356→  const launchQuiz = (p: { testId: string; scheduleId?: string; subjectId?: string; title: string }) => {
+   357→   357→    if (!currentBatchId) return;
+   358→   358→    const q = new URLSearchParams({
+   359→   359→      testId: p.testId,
+   360→   360→      batchId: currentBatchId,
+   361→   361→      scheduleId: p.scheduleId || '',
+   362→   362→      subjectId: p.subjectId || currentSubject?.masterId || '',
+   363→   363→      type: 'Start',
+   364→   364→    });
+   365→   365→    addXP(10, 'Attempted Test/DPP');
+   366→   366→    setDppOpen(false);
+   367→   367→    setTestFrame({ open: true, url: `/quiz?${q.toString()}`, title: p.title || 'Test Attempt' });
+   368→   368→  };
+   369→   369→
+   370→   370→  // ==================================================================
+   371→   371→  // MODALS
+   372→   372→  // ==================================================================
+   373→   373→  const openBatchInfo = async () => {
+   374→   374→    if (!currentBatchId) return;
+   375→   375→    setBatchInfoOpen(true);
+   376→   376→    setBatchInfoLoading(true);
+   377→   377→    const res = await api.batchDetail(currentBatchId);
+   378→   378→    setBatchInfo(res.success && res.data ? res.data : null);
+   379→   379→    setBatchInfoLoading(false);
+   380→   380→  };
+   381→   381→
+   382→   382→  const openNotesModal = async (scheduleId: string, subjectMasterId: string) => {
+   383→   383→    if (!currentBatchId) return;
+   384→   384→    setNotesOpen(true);
+   385→   385→    setNotesLoading(true);
+   386→   386→    setNoteRows([]);
+   387→   387→    const res = await api.scheduleDetail(currentBatchId, scheduleId, subjectMasterId);
+   388→   388→    const item = res.data as {
+   389→   389→      topic?: string;
+   390→   390→      name?: string;
+   391→   391→      homeworkIds?: Array<{ topic?: string; attachmentIds?: Array<{ baseUrl?: string; key?: string }> }>;
+   392→   392→    } | undefined;
+   393→   393→
+   394→   394→    const rows: AttachmentRow[] = [];
+   395→   395→    if (item) {
+   396→   396→      (item.homeworkIds || []).forEach((hw) => {
+   397→   397→        (hw.attachmentIds || []).forEach((att) => {
+   398→   398→          rows.push({ title: hw.topic || 'Class Note', url: imageUrl(att) });
+   399→   399→        });
+   400→   400→      });
+   401→   401→    }
+   402→   402→    setNoteRows(rows);
+   403→   403→    setNotesLoading(false);
+   404→   404→  };
+   405→   405→
+   406→   406→  const handleUnenroll = (batchId: string) => {
+   407→   407→    if (!window.confirm('Are you sure you want to unenroll from this batch?')) return;
+   408→   408→    unenroll(batchId);
+   409→   409→    setBatchInfoOpen(false);
+   410→   410→    if (currentBatchId === batchId) {
+   411→   411→      const remaining = enrolled.filter((id) => id !== batchId);
+   412→   412→      if (remaining.length > 0) setCurrentBatchId(remaining[0]);
+   413→   413→      else {
+   414→   414→        setCurrentBatchId(null);
+   415→   415→        nav('home-view');
+   416→   416→      }
+   417→   417→    }
+   418→   418→  };
+   419→   419→
+   420→   420→  // ==================================================================
+   421→   421→  // RENDER HELPERS
+   422→   422→  // ==================================================================
+   423→   423→  const renderLectureCard = (node: ContentNodePublic) => {
+   424→   424→    const d = node.data;
+   425→   425→    const thumb = d.videoDetails?.image || DEFAULT_THUMB;
+   426→   426→    const title = d.topic || d.name || 'Lecture';
+   427→   427→    const date = d.date ? new Date(d.date).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
+   428→   428→    const vId = d._id || d.videoDetails?._id || node._id;
+   429→   429→    const master = currentSubject?.masterId || currentSubject?.id || '';
+   430→   430→    const isWatched = watched.includes(vId);
+   431→   431→    const bName = currentBatch?.name || 'PW Batch';
+   432→   432→    const base = node.type === 'DPP_VIDEOS' ? '/player' : '/player';
+   433→   433→    const playerUrl = `${base}?videoId=${encodeURIComponent(vId)}&batchId=${encodeURIComponent(currentBatchId || '')}&subjectId=${encodeURIComponent(master)}&schId=${encodeURIComponent(node._id)}&title=${encodeURIComponent(title)}&batchName=${encodeURIComponent(bName)}`;
+   434→   434→    const hasAttachments = d.homeworkIds && d.homeworkIds.length > 0;
+   435→   435→
+   436→   436→    return (
+   437→   437→      <div className="content-card" key={node._id} style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+   438→   438→        <div className="d-flex gap-3 mb-3">
+   439→   439→          <img src={thumb} className="lecture-thumb" alt={title} />
+   440→   440→          <div className="flex-grow-1">
+   441→   441→            <span style={{ background: '#eff6ff', color: '#2563eb', fontSize: '0.7rem', fontWeight: 800, padding: '2px 6px', borderRadius: 4, display: 'inline-block', marginBottom: 5 }}>
+   442→   442→              {node.type === 'DPP_VIDEOS' ? 'DPP VIDEO' : 'VIDEO'}
+   443→   443→            </span>
+   444→   444→            <div style={{ fontWeight: 700, fontSize: '1rem', color: 'var(--sb-text-dark)' }}>{title}</div>
+   445→   445→            <div style={{ color: 'var(--sb-text-muted)', fontSize: '0.8rem', marginTop: 5 }}>
+   446→   446→              <i className="fas fa-clock"></i> {date}
+   447→   447→            </div>
+   448→   448→          </div>
+   449→   449→        </div>
+   450→   450→        <div className="d-flex gap-2">
+   451→   451→          <button
+   452→   452→            className={`btn-check-done ${isWatched ? 'active' : ''}`}
+   453→   453→            title="Mark as Watched"
+   454→   454→            onClick={() => {
+   455→   455→              const added = toggleWatched(vId);
+   456→   456→              if (added) addXP(10, 'Watched Video');
+   457→   457→            }}
+   458→   458→          >
+   459→   459→            <i className="fas fa-check"></i>
+   460→   460→          </button>
+   461→   461→          <button className="btn-play" style={{ flexGrow: 1 }} onClick={() => window.open(playerUrl, '_blank')}>
+   462→   462→            <i className="fas fa-play"></i> Watch
+   463→   463→          </button>
+   464→   464→          {hasAttachments ? (
+   465→   465→            <button className="btn-notes" onClick={() => openNotesModal(node._id, master)}>
+   466→   466→              <i className="fas fa-file-alt"></i>
+   467→   467→            </button>
+   468→   468→          ) : null}
+   469→   469→        </div>
+   470→   470→      </div>
+   471→   471→    );
+   472→   472→  };
+   473→   473→
+   474→   474→  const renderPdfCard = (node: ContentNodePublic) => {
+   475→   475→    const d = node.data;
+   476→   476→    const title = d.topic || 'Document';
+   477→   477→    const att = d.homeworkIds?.[0]?.attachmentIds?.[0];
+   478→   478→    const url = imageUrl(att);
+   479→   479→    const isDpp = node.type === 'DPP_PDF';
+   480→   480→    const tagColor = isDpp ? '#d97706' : '#e11d48';
+   481→   481→    const tagBg = isDpp ? '#fef3c7' : '#fee2e2';
+   482→   482→    return (
+   483→   483→      <div className="content-card d-flex align-items-center justify-content-between" key={node._id} style={{ padding: 20 }}>
+   484→   484→        <div className="d-flex align-items-center gap-3" style={{ maxWidth: '75%' }}>
+   485→   485→          <div style={{ background: tagBg, color: tagColor, width: 40, height: 40, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem', flexShrink: 0 }}>
+   486→   486→            <i className="fas fa-file-pdf"></i>
+   487→   487→          </div>
+   488→   488→          <div style={{ fontWeight: 600, fontSize: '0.95rem', wordBreak: 'break-word' }}>{title}</div>
+   489→   489→        </div>
+   490→   490→        <button
+   491→   491→          className="btn btn-sb-dark"
+   492→   492→          style={{ padding: '8px 16px', borderRadius: 8, fontSize: '0.9rem', width: 'auto' }}
+   493→   493→          onClick={() => {
+   494→   494→            if (!url) return;
+   495→   495→            window.open(url, '_blank');
+   496→   496→            addXP(5, 'Viewed Document');
+   497→   497→          }}
+   498→   498→        >
+   499→   499→          <i className="fas fa-eye"></i> View
+   500→   500→        </button>
+   501→   501→      </div>
+   502→   502→    );
+   503→   503→  };
+   504→   504→
+   505→   505→  const renderDppItem = (t: TestItemPublic) => {
+   506→   506→    return (
+   507→   507→      <div className="content-card" key={t._id} style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+   508→   508→        <div className="d-flex align-items-center gap-3 mb-3">
+   509→   509→          <div style={{ background: '#fef3c7', color: '#d97706', width: 45, height: 45, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem' }}>
+   510→   510→            <i className="fas fa-tasks"></i>
+   511→   511→          </div>
+   512→   512→          <div>
+   513→   513→            <div style={{ fontWeight: 700, fontSize: '1rem' }}>{t.name}</div>
+   514→   514→            <div style={{ color: 'var(--sb-text-muted)', fontSize: '0.8rem', marginTop: 4 }}>
+   515→   515→              {t.totalQuestions} Qs &bull; {t.totalMarks} Marks
+   516→   516→            </div>
+   517→   517→          </div>
+   518→   518→        </div>
+   519→   519→        <button
+   520→   520→          className="btn-dpp"
+   521→   521→          onClick={() => {
+   522→   522→            setDppMeta({
+   523→   523→              testId: t._id,
+   524→   524→              scheduleId: t.dppQuizDetails?.scheduleId || '',
+   525→   525→              subjectId: currentSubject?.masterId || '',
+   526→   526→              name: t.name,
+   527→   527→            });
+   528→   528→            setDppOpen(true);
+   529→   529→          }}
+   530→   530→        >
+   531→   531→          Attempt Now
+   532→   532→        </button>
+   533→   533→      </div>
+   534→   534→    );
+   535→   535→  };
+   536→   536→
+   537→   537→  // ==================================================================
+   538→   538→  // MAIN RENDER
+   539→   539→  // ==================================================================
+   540→   540→  const now = new Date();
+   541→   541→
+   542→   542→  const liveEvents = events.filter((e) => e.type === 'LECTURE' && e.data);
+   543→   543→
+   544→   544→  return (
+   545→   545→    <>
+   546→   546→      {/* ================= SIDEBAR ================= */}
+   547→   547→      <div className={`sidebar-overlay ${sidebarOpen ? 'active' : ''}`} onClick={() => setSidebarOpen(false)}></div>
+   548→   548→      <div className={`sidebar ${sidebarOpen ? 'active' : ''}`}>
+   549→   549→        <div className="sidebar-header">
+   550→   550→          <div className="logo-area">
+   551→   551→            <img src="/logo-bison.png" alt="Study Bison logo" style={{ width: 38, height: 38, borderRadius: 11, objectFit: 'cover' }} />
+   552→   552→            <span className="logo-text">Study <span>Bison</span></span>
+   553→   553→          </div>
+   554→   554→          <button className="sheet-close" onClick={() => setSidebarOpen(false)} style={{ position: 'relative', top: 0, right: 0, width: 35, height: 35 }} aria-label="Close menu">
+   555→   555→            <i className="fas fa-times"></i>
+   556→   556→          </button>
+   557→   557→        </div>
+   558→   558→        <div className="sidebar-links">
+   559→   559→          <a onClick={() => nav('study-view')} className={view === 'study-view' ? 'active' : ''} id="link-study" role="button" tabIndex={0}>
+   560→   560→            <i className="fas fa-book-open"></i> Study Dashboard
+   561→   561→          </a>
+   562→   562→          <a onClick={() => nav('home-view')} className={view === 'home-view' ? 'active' : ''} id="link-courses" role="button" tabIndex={0}>
+   563→   563→            <i className="fas fa-compass"></i> All Courses
+   564→   564→          </a>
+   565→   565→        </div>
+   566→   566→        <div id="utk-credit" style={{ marginTop: 'auto', padding: 24, textAlign: 'center', borderTop: '1px solid var(--sb-border-color)', background: 'rgba(0,0,0,0.02)' }}>
+   567→   567→          <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--sb-text-muted)', letterSpacing: '0.5px' }}>
+   568→   568→            <i className="fas fa-code" style={{ color: 'var(--sb-text-dark)' }}></i> Developed by <br />
+   569→   569→            <span style={{ color: 'var(--sb-primary)', fontWeight: 800, fontSize: '1.2rem', textTransform: 'uppercase', display: 'inline-block', marginTop: 5 }}>Utkarsh</span>
+   570→   570→          </div>
+   571→   571→        </div>
+   572→   572→      </div>
+   573→   573→
+   574→   574→      {/* ================= HEADER ================= */}
+   575→   575→      <header className="sb-header">
+   576→   576→        <div className="d-flex align-items-center">
+   577→   577→          <button className="menu-btn" onClick={() => setSidebarOpen(true)} aria-label="Open menu">
+   578→   578→            <i className="fas fa-bars-staggered"></i>
+   579→   579→          </button>
+   580→   580→          <a className="logo-area" onClick={() => nav('home-view')} role="button" tabIndex={0}>
+   581→   581→            <img src="/logo-bison.png" alt="Study Bison logo" style={{ width: 38, height: 38, borderRadius: 11, objectFit: 'cover' }} />
+   582→   582→            <span className="logo-text">Study <span>Bison</span></span>
+   583→   583→          </a>
+   584→   584→        </div>
+   585→   585→        <div className="d-flex align-items-center">
+   586→   586→          <div className="nav-tab active xp-chip">
+   587→   587→            <i className="fas fa-bolt text-warning"></i> <span>{xp} XP</span>
+   588→   588→          </div>
+   589→   589→        </div>
+   590→   590→      </header>
+   591→   591→
+   592→   592→      <div id="app-container">
+   593→   593→        {/* ================= HOME VIEW ================= */}
+   594→   594→        <div id="home-view" className={`view-section ${view === 'home-view' ? 'active-view' : ''}`}>
+   595→   595→          <div className="search-container">
+   596→   596→            <div className="d-flex justify-content-between align-items-center mb-3">
+   597→   597→              <h4 className="m-0" style={{ fontWeight: 800 }}>Discover Courses</h4>
+   598→   598→              <span style={{ fontSize: '0.85rem', color: 'var(--sb-primary)', fontWeight: 700 }}>
+   599→   599→                {searching ? <i className="fas fa-spinner fa-spin"></i> : null}
+   600→   600→              </span>
+   601→   601→            </div>
+   602→   602→            <input
+   603→   603→              type="text"
+   604→   604→              className="search-bar"
+   605→   605→              placeholder="Search for exams, batches..."
+   606→   606→              value={searchTerm}
+   607→   607→              onChange={(e) => handleSearchInput(e.target.value)}
+   608→   608→              aria-label="Search for exams, batches"
+   609→   609→            />
+   610→   610→          </div>
+   611→   611→          <div className="container px-4 pb-5">
+   612→   612→            {catalogError ? (
+   613→   613→              <div className="text-center p-5 text-muted">{catalogError}</div>
+   614→   614→            ) : null}
+   615→   615→            {!searching && batches.length === 0 && !catalogError ? (
+   616→   616→              <div className="text-center p-5 text-muted">
+   617→   617→                <i className="fas fa-search fa-2x mb-3" style={{ display: 'block' }}></i>
+   618→   618→                No batches found.
+   619→   619→              </div>
+   620→   620→            ) : null}
+   621→   621→            <div className="row g-4">
+   622→   622→              {batches.map((b) => {
+   623→   623→                const thumb = b.imageUrl || DEFAULT_THUMB;
+   624→   624→                const isEnrolled = enrolled.includes(b._id);
+   625→   625→                return (
+   626→   626→                  <div className="col-12 col-md-6 col-lg-4" key={b._id}>
+   627→   627→                    <div className="card-custom" onClick={() => openCatalogInfo(b)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openCatalogInfo(b); }}>
+   628→   628→                      <img src={thumb} className="batch-thumb" alt={b.name} loading="lazy" />
+   629→   629→                      <div className="card-body-custom">
+   630→   630→                        <div className="title-text mt-2">{b.name}</div>
+   631→   631→                        <button className="btn-sb-dark w-100 mt-auto" style={{ fontWeight: 600 }}>
+   632→   632→                          {isEnrolled ? 'Study' : 'View Details'}
+   633→   633→                        </button>
+   634→   634→                      </div>
+   635→   635→                    </div>
+   636→   636→                  </div>
+   637→   637→                );
+   638→   638→              })}
+   639→   639→            </div>
+   640→   640→            {hasMore ? (
+   641→   641→              <div className="text-center mt-5" id="load-more-container" style={{ display: 'block' }}>
+   642→   642→                <button className="btn btn-sb-dark" style={{ width: 'auto', padding: '14px 40px', borderRadius: 30 }} onClick={loadNextPage}>
+   643→   643→                  <i className="fas fa-sync-alt me-2"></i> {searching ? 'Loading...' : 'Load More'}
+   644→   644→                </button>
+   645→   645→              </div>
+   646→   646→            ) : null}
+   647→   647→          </div>
+   648→   648→        </div>
+   649→   649→
+   650→   650→        {/* ================= STUDY VIEW ================= */}
+   651→   651→        <div id="study-view" className={`view-section ${view === 'study-view' ? 'active-view' : ''}`}>
+   652→   652→          <div className="study-header-bg">
+   653→   653→            <div style={{ flexGrow: 1, overflow: 'hidden', paddingRight: 15 }}>
+   654→   654→              <div style={{ fontSize: '0.85rem', fontWeight: 700, color: '#9CA3AF', marginBottom: 5, textTransform: 'uppercase', letterSpacing: '1px' }}>Selected Batch</div>
+   655→   655→              <select
+   656→   656→                className="batch-dropdown"
+   657→   657→                value={currentBatchId || ''}
+   658→   658→                onChange={(e) => setCurrentBatchId(e.target.value)}
+   659→   659→                aria-label="Select enrolled batch"
+   660→   660→              >
+   661→   661→                {enrolledDetails.length === 0 ? <option value="">No batch enrolled</option> : null}
+   662→   662→                {enrolledDetails.map((b) => (
+   663→   663→                  <option key={b._id} value={b._id}>{b.name}</option>
+   664→   664→                ))}
+   665→   665→              </select>
+   666→   666→            </div>
+   667→   667→            <button className="back-btn" style={{ background: 'rgba(255,255,255,0.1)', color: '#fff', margin: 0 }} onClick={openBatchInfo} aria-label="Batch info">
+   668→   668→              <i className="fas fa-info"></i>
+   669→   669→            </button>
+   670→   670→          </div>
+   671→   671→
+   672→   672→          <div className="offerings-container pb-0">
+   673→   673→            <div className="offering-title">Quick Access</div>
+   674→   674→
+   675→   675→            <div className="offering-item" onClick={openAllClasses} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openAllClasses(); }}>
+   676→   676→              <div className="offering-icon icon-blue"><i className="fas fa-tv"></i></div>
+   677→   677→              <div style={{ flexGrow: 1 }}>
+   678→   678→                <span style={{ fontWeight: 800, fontSize: '1.15rem', color: 'var(--sb-text-dark)', display: 'block' }}>All Classes</span>
+   679→   679→                <span style={{ fontSize: '0.85rem', color: 'var(--sb-text-muted)', fontWeight: 500 }}>Lectures &amp; Resources</span>
+   680→   680→              </div>
+   681→   681→              <i className="fas fa-chevron-right text-muted ms-auto"></i>
+   682→   682→            </div>
+   683→   683→
+   684→   684→            <div className="offering-item" onClick={openAllTests} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openAllTests(); }}>
+   685→   685→              <div className="offering-icon icon-indigo"><i className="fas fa-file-signature"></i></div>
+   686→   686→              <div style={{ flexGrow: 1 }}>
+   687→   687→                <span style={{ fontWeight: 800, fontSize: '1.15rem', color: 'var(--sb-text-dark)', display: 'block' }}>All Tests &amp; DPPs</span>
+   688→   688→                <span style={{ fontSize: '0.85rem', color: 'var(--sb-text-muted)', fontWeight: 500 }}>Practice &amp; Mocks</span>
+   689→   689→              </div>
+   690→   690→              <i className="fas fa-chevron-right text-muted ms-auto"></i>
+   691→   691→            </div>
+   692→   692→          </div>
+   693→   693→
+   694→   694→          <div className="live-section mt-4">
+   695→   695→            <div className="offering-title"><i className="fas fa-broadcast-tower text-danger me-2"></i> Today&apos;s Classes</div>
+   696→   696→            <div id="live-classes-scroll">
+   697→   697→              {eventsLoading ? (
+   698→   698→                <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   699→   699→              ) : !currentBatchId ? (
+   700→   700→                <div className="text-center py-4">
+   701→   701→                  <i className="fas fa-calendar-times" style={{ fontSize: '3rem', color: 'var(--sb-text-muted)', opacity: 0.5, marginBottom: 10 }}></i>
+   702→   702→                  <h6 style={{ fontWeight: 700 }}>No batch selected</h6>
+   703→   703→                  <p className="text-muted" style={{ fontSize: '0.85rem' }}>Enroll in a batch from All Courses to see your schedule.</p>
+   704→   704→                </div>
+   705→   705→              ) : liveEvents.length === 0 ? (
+   706→   706→                <div className="text-center py-4">
+   707→   707→                  <i className="fas fa-calendar-times" style={{ fontSize: '3rem', color: 'var(--sb-text-muted)', opacity: 0.5, marginBottom: 10 }}></i>
+   708→   708→                  <h6 style={{ fontWeight: 700 }}>No upcoming events,</h6>
+   709→   709→                  <p className="text-muted" style={{ fontSize: '0.85rem' }}>Perfect time to catch up on pending work!</p>
+   710→   710→                </div>
+   711→   711→              ) : (
+   712→   712→                liveEvents.map((e) => {
+   713→   713→                  const d = e.data;
+   714→   714→                  const start = new Date(d.startTime);
+   715→   715→                  const isLiveNow = d.status === 'LIVE';
+   716→   716→                  const isEnded = d.status === 'ENDED';
+   717→   717→                  const thumb = d.videoDetails?.image || DEFAULT_THUMB;
+   718→   718→                  const time = d.startTime ? start.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+   719→   719→                  const subjectMaster = d.subjectId?._id || '';
+   720→   720→                  const playable = d.urlType === 'penpencilvdo' || d.urlType === 'youtube';
+   721→   721→                  const watchUrl = isEnded && playable
+   722→   722→                    ? `/player?videoId=${encodeURIComponent(d._id)}&batchId=${encodeURIComponent(d.batchId || currentBatchId || '')}&subjectId=${encodeURIComponent(subjectMaster)}&title=${encodeURIComponent(d.topic || '')}`
+   723→   723→                    : '';
+   724→   724→                  const liveUrl = `/live?videoId=${encodeURIComponent(d._id)}&batchId=${encodeURIComponent(d.batchId || currentBatchId || '')}&subjectId=${encodeURIComponent(subjectMaster)}&title=${encodeURIComponent(d.topic || '')}`;
+   725→   725→                  return (
+   726→   726→                    <div className="live-card-vertical" key={e._id}>
+   727→   727→                      <img src={thumb} className="live-thumb-sm" alt={d.topic} />
+   728→   728→                      <div className="flex-grow-1">
+   729→   729→                        {isLiveNow
+   730→   730→                          ? <span className="live-tag">🔴LIVE NOW</span>
+   731→   731→                          : isEnded
+   732→   732→                            ? <span className="upcoming-tag" style={{ background: '#eef2f7', color: '#64748b' }}>✔ COMPLETED</span>
+   733→   733→                            : d.status === 'CANCELLED'
+   734→   734→                              ? <span className="upcoming-tag" style={{ background: '#fee2e2', color: '#e11d48' }}>✖ CANCELLED</span>
+   735→   735→                              : <span className="upcoming-tag">🔔UPCOMING</span>}
+   736→   736→                        <div style={{ fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.2, marginBottom: 5, marginTop: 6, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{d.topic || d._id}</div>
+   737→   737→                        <div className="d-flex justify-content-between align-items-center mt-2">
+   738→   738→                          <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--sb-text-muted)' }}>
+   739→   739→                            <i className="far fa-clock"></i> {time}
+   740→   740→                          </div>
+   741→   741→                          <div className="d-flex align-items-center gap-2">
+   742→   742→                            {isLiveNow ? (
+   743→   743→                              <button className="btn btn-sm btn-danger" onClick={() => window.open(liveUrl, '_blank')}>
+   744→   744→                                <i className="fas fa-play"></i> Join
+   745→   745→                              </button>
+   746→   746→                            ) : isEnded && watchUrl ? (
+   747→   747→                              <button className="btn btn-sm btn-sb-dark" onClick={() => window.open(watchUrl, '_blank')}>
+   748→   748→                                <i className="fas fa-play"></i> Watch
+   749→   749→                              </button>
+   750→   750→                            ) : !isEnded ? (
+   751→   751→                              <span style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--sb-text-muted)', border: '1px solid var(--sb-border-color)', padding: '4px 8px', borderRadius: 4 }}>Scheduled</span>
+   752→   752→                            ) : null}
+   753→   753→                            {d.status !== 'CANCELLED' ? (
+   754→   754→                              <button className="btn btn-sm btn-outline-secondary" onClick={() => openNotesModal(e._id, subjectMaster)}>Notes</button>
+   755→   755→                            ) : null}
+   756→   756→                          </div>
+   757→   757→                        </div>
+   758→   758→                      </div>
+   759→   759→                    </div>
+   760→   760→                  );
+   761→   761→                })
+   762→   762→              )}
+   763→   763→            </div>
+   764→   764→          </div>
+   765→   765→        </div>
+   766→   766→
+   767→   767→        {/* ================= ALL CLASSES VIEW ================= */}
+   768→   768→        <div id="all-classes-view" className={`view-section ${view === 'all-classes-view' ? 'active-view' : ''}`}>
+   769→   769→          <div className="breadcrumb-pw">
+   770→   770→            <button className="back-btn" onClick={() => nav('study-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+   771→   771→            <span>Subjects</span>
+   772→   772→          </div>
+   773→   773→          <div className="nav-tabs-pw">
+   774→   774→            <div className={`nav-tab ${resourcesTab === 'subjects' ? 'active' : ''}`} id="tab-subjects" onClick={() => switchClassesTab('subjects')}>Subjects</div>
+   775→   775→            <div className={`nav-tab ${resourcesTab === 'resources' ? 'active' : ''}`} id="tab-resources" onClick={() => switchClassesTab('resources')}>Resources</div>
+   776→   776→          </div>
+   777→   777→          <div className="px-4 py-3">
+   778→   778→            {resourcesTab === 'subjects' ? (
+   779→   779→              subjectsLoading ? (
+   780→   780→                <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   781→   781→              ) : subjects.length === 0 ? (
+   782→   782→                <p className="text-muted text-center w-100">No subjects mapped.</p>
+   783→   783→              ) : (
+   784→   784→                <div className="row g-3" id="subjects-grid">
+   785→   785→                  {subjects.map((sub) => (
+   786→   786→                    <div className="col-12 col-md-6" key={sub._id}>
+   787→   787→                      <div className="list-card" onClick={() => openSubject(sub)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openSubject(sub); }}>
+   788→   788→                        <div className="sub-icon-letter">{(sub.subject || 'S').substring(0, 2).toUpperCase()}</div>
+   789→   789→                        <div style={{ flexGrow: 1, fontWeight: 700, fontSize: '1.05rem' }}>{sub.subject}</div>
+   790→   790→                        <i className="fas fa-chevron-right text-muted"></i>
+   791→   791→                      </div>
+   792→   792→                    </div>
+   793→   793→                  ))}
+   794→   794→                </div>
+   795→   795→              )
+   796→   796→            ) : resourcesLoading ? (
+   797→   797→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   798→   798→            ) : resourceTopics.length === 0 ? (
+   799→   799→              <p className="text-muted text-center p-4">No resources found.</p>
+   800→   800→            ) : (
+   801→   801→              <div id="resources-grid">
+   802→   802→                {resourceTopics.map((t) => (
+   803→   803→                  <div className="list-card" key={t._id} onClick={() => openResourceTopic(t)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openResourceTopic(t); }}>
+   804→   804→                    <div className="sub-icon-letter" style={{ background: '#fefce8', color: '#d97706' }}><i className="fas fa-folder"></i></div>
+   805→   805→                    <div style={{ flexGrow: 1 }}>
+   806→   806→                      <div style={{ fontWeight: 700, fontSize: '1rem' }}>{t.name}</div>
+   807→   807→                      <div style={{ fontSize: '0.8rem', color: 'var(--sb-text-muted)', marginTop: 2 }}>{t.notes} Notes &bull; {t.videos} Videos</div>
+   808→   808→                    </div>
+   809→   809→                    <i className="fas fa-chevron-right text-muted"></i>
+   810→   810→                  </div>
+   811→   811→                ))}
+   812→   812→              </div>
+   813→   813→            )}
+   814→   814→          </div>
+   815→   815→        </div>
+   816→   816→
+   817→   817→        {/* ================= CHAPTERS VIEW ================= */}
+   818→   818→        <div id="chapters-view" className={`view-section ${view === 'chapters-view' ? 'active-view' : ''}`}>
+   819→   819→          <div className="breadcrumb-pw">
+   820→   820→            <button className="back-btn" onClick={() => nav('all-classes-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+   821→   821→            <span>{currentSubject?.name || 'Subject'}</span>
+   822→   822→          </div>
+   823→   823→          <div className="nav-tabs-pw">
+   824→   824→            <div className={`nav-tab ${chaptersTab === 'UNITS' ? 'active' : ''}`} id="tab-ch-chapters" onClick={() => switchChaptersTab('UNITS')}>Chapters</div>
+   825→   825→            <div className={`nav-tab ${chaptersTab === 'STUDY_MATERIAL' ? 'active' : ''}`} id="tab-ch-study" onClick={() => switchChaptersTab('STUDY_MATERIAL')}>Study Material</div>
+   826→   826→          </div>
+   827→   827→          <div className="px-4 py-3" id="chapters-list">
+   828→   828→            {chaptersLoading ? (
+   829→   829→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   830→   830→            ) : chapters.length === 0 ? (
+   831→   831→              <p className="text-muted text-center p-4">Directory empty.</p>
+   832→   832→            ) : (
+   833→   833→              chapters.map((t, i) => {
+   834→   834→                const code = i < 9 ? `0${i + 1}` : `${i + 1}`;
+   835→   835→                const tagPre = chaptersTab === 'UNITS' ? 'CH' : 'SM';
+   836→   836→                return (
+   837→   837→                  <div className="list-card" key={t._id} onClick={() => openTopic(t)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter') openTopic(t); }}>
+   838→   838→                    <div style={{ flexGrow: 1 }}>
+   839→   839→                      <span style={{ background: 'var(--sb-primary-light)', color: 'var(--sb-primary)', fontSize: '0.75rem', fontWeight: 800, padding: '3px 8px', borderRadius: 4 }}>{tagPre} - {code}</span>
+   840→   840→                      <div style={{ fontWeight: 700, fontSize: '1.05rem', marginTop: 8 }}>{t.name}</div>
+   841→   841→                      <div style={{ fontSize: '0.8rem', color: 'var(--sb-text-muted)', marginTop: 4 }}>
+   842→   842→                        {t.videos} Videos &bull; {t.notes} Notes{t.exercises ? ` • ${t.exercises} DPPs` : ''}
+   843→   843→                      </div>
+   844→   844→                    </div>
+   845→   845→                    <i className="fas fa-chevron-right text-muted ms-3"></i>
+   846→   846→                  </div>
+   847→   847→                );
+   848→   848→              })
+   849→   849→            )}
+   850→   850→          </div>
+   851→   851→        </div>
+   852→   852→
+   853→   853→        {/* ================= CONTENT VIEW ================= */}
+   854→   854→        <div id="content-view" className={`view-section ${view === 'content-view' ? 'active-view' : ''}`}>
+   855→   855→          <div className="breadcrumb-pw">
+   856→   856→            <button className="back-btn" onClick={() => nav('chapters-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+   857→   857→            <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{currentTopic?.name || 'Chapter'}</span>
+   858→   858→          </div>
+   859→   859→          <div className="nav-tabs-pw" id="content-tabs">
+   860→   860→            {[['ALL', 'All'], ['LECTURE', 'Lectures'], ['DPP_TEST', 'DPPs'], ['NOTES', 'Notes'], ['DPP_PDF', 'DPP PDFs'], ['DPP_VIDEOS', 'DPP Videos']].map(([key, label]) => (
+   861→   861→              <div key={key} className={`nav-tab ${contentTab === key ? 'active' : ''}`} onClick={() => filterContentTab(key)}>{label}</div>
+   862→   862→            ))}
+   863→   863→          </div>
+   864→   864→          <div className="px-4 py-3" id="content-list">
+   865→   865→            {contentLoading ? (
+   866→   866→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   867→   867→            ) : contentTab === 'DPP_TEST' ? (
+   868→   868→              dppItems.length === 0 ? (
+   869→   869→                <p className="text-center text-muted p-4">No DPPs available for this chapter.</p>
+   870→   870→              ) : (
+   871→   871→                dppItems.map((t) => renderDppItem(t))
+   872→   872→              )
+   873→   873→            ) : contentNodes.length === 0 ? (
+   874→   874→              <p className="text-center text-muted p-4">No content available.</p>
+   875→   875→            ) : (
+   876→   876→              contentNodes.map((node) =>
+   877→   877→                node.data && (node.type === 'LECTURE' || node.type === 'DPP_VIDEOS')
+   878→   878→                  ? renderLectureCard(node)
+   879→   879→                  : node.data && node.type === 'NOTES'
+   880→   880→                    ? renderPdfCard(node)
+   881→   881→                    : null,
+   882→   882→              )
+   883→   883→            )}
+   884→   884→          </div>
+   885→   885→        </div>
+   886→   886→
+   887→   887→        {/* ================= ALL TESTS VIEW ================= */}
+   888→   888→        <div id="all-tests-view" className={`view-section ${view === 'all-tests-view' ? 'active-view' : ''}`}>
+   889→   889→          <div className="breadcrumb-pw">
+   890→   890→            <button className="back-btn" onClick={() => nav('study-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+   891→   891→            <span>Assessments</span>
+   892→   892→          </div>
+   893→   893→          <div className="px-4 py-3" id="tests-list">
+   894→   894→            {testsLoading ? (
+   895→   895→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+   896→   896→            ) : tests.length === 0 ? (
+   897→   897→              <p className="text-muted text-center p-4">No tests configured.</p>
+   898→   898→            ) : (
+   899→   899→              tests.map((t) => (
+   900→   900→                <div className="content-card" key={t._id} style={{ flexDirection: 'column', alignItems: 'stretch' }}>
+   901→   901→                  <div className="d-flex align-items-center gap-3 mb-3">
+   902→   902→                    <div style={{ background: '#fef3c7', color: '#d97706', width: 45, height: 45, borderRadius: 8, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '1.2rem' }}>
+   903→   903→                      <i className="fas fa-tasks"></i>
+   904→   904→                    </div>
+   905→   905→                    <div>
+   906→   906→                      <div style={{ fontWeight: 700, fontSize: '1rem' }}>{t.name || t._id}</div>
+   907→   907→                      <div style={{ color: 'var(--sb-text-muted)', fontSize: '0.8rem', marginTop: 4 }}>
+   908→   908→                        {t.totalQuestions} Qs &bull; {t.totalMarks} Marks
+   909→   909→                      </div>
+   910→   910→                    </div>
+   911→   911→                  </div>
+   912→   912→                  <div className="d-flex gap-2">
+   913→   913→                    <button className="btn-dpp" style={{ background: '#f1f5f9', color: 'var(--sb-text-dark)' }} onClick={() => openInstructions(t)}>
+   914→   914→                      <i className="fas fa-info-circle me-1"></i> Instructions
+   915→   915→                    </button>
+   916→   916→                    <button className="btn-dpp" style={{ flexGrow: 1 }} onClick={() => launchQuiz({ testId: t._id, subjectId: '', title: t.name || 'Test Attempt' })}>
+   917→   917→                      Attempt Now
+   918→   918→                    </button>
+   919→   919→                  </div>
+   920→   920→                </div>
+   921→   921→              ))
+   922→   922→            )}
+   923→   923→          </div>
+   924→   924→        </div>
+   925→   925→      </div>
+   926→   926→
+   927→   927→      {/* ================= BATCH INFO MODAL ================= */}
+   928→   928→      <div className={`modal-overlay ${batchInfoOpen ? 'active' : ''}`} id="batch-info-modal" onClick={(e) => { if (e.target === e.currentTarget) setBatchInfoOpen(false); }}>
+   929→   929→        <div className="bottom-sheet" style={{ padding: 0, overflow: 'hidden' }}>
+   930→   930→          <i className="fas fa-times sheet-close" onClick={() => setBatchInfoOpen(false)}></i>
+   931→   931→          <div id="batch-info-content">
+   932→   932→            {batchInfoLoading ? (
+   933→   933→              <div className="loader-center" style={{ padding: '100px 0' }}><i className="fas fa-spinner fa-spin"></i> Fetching Details...</div>
+   934→   934→            ) : !batchInfo ? (
+   935→   935→              <p className="text-center text-muted p-5">Batch details not available.</p>
+   936→   936→            ) : (() => {
+   937→   937→              const thumb = imageUrl(batchInfo.imageUrl, DEFAULT_THUMB);
+   938→   938→              const priceText =
+   939→   939→                batchInfo.amount == null
+   940→   940→                  ? ''
+   941→   941→                  : batchInfo.amount === 0
+   942→   942→                    ? 'Free'
+   943→   943→                    : `₹${batchInfo.amount.toLocaleString('en-IN')}`;
+   944→   944→              const sDate = batchInfo.startDate ? new Date(batchInfo.startDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'TBA';
+   945→   945→              const eDate = batchInfo.endDate ? new Date(batchInfo.endDate).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : 'TBA';
+   946→   946→              const isEnrolled = enrolled.includes(batchInfo._id);
+   947→   947→              return (
+   948→   948→                <>
+   949→   949→                  <div style={{ background: `url('${thumb}') center/cover`, height: 200, width: '100%', borderRadius: '20px 20px 0 0', position: 'relative' }}>
+   950→   950→                    <div style={{ position: 'absolute', bottom: 0, left: 0, width: '100%', height: '50%', background: 'linear-gradient(to top, rgba(0,0,0,0.8), transparent)' }}></div>
+   951→   951→                    {priceText ? <div className="badge bg-danger position-absolute top-0 end-0 m-3 fs-6">{priceText}</div> : null}
+   952→   952→                  </div>
+   953→   953→                  <div className="p-4 pt-3">
+   954→   954→                    <h4 className="fw-bold mb-1">{batchInfo.name}</h4>
+   955→   955→                    {batchInfo.byName ? (
+   956→   956→                      <div style={{ color: 'var(--sb-text-muted)', fontWeight: 600, fontSize: '0.9rem', marginBottom: 10 }}>{batchInfo.byName}</div>
+   957→   957→                    ) : null}
+   958→   958→
+   959→   959→                    {batchInfo.exams.length > 0 ? (
+   960→   960→                      <div style={{ marginBottom: 14 }}>
+   961→   961→                        {batchInfo.exams.map((exam, i) => (
+   962→   962→                          <span key={i} style={{ background: '#fef3c7', color: '#d97706', border: '1px solid #fde68a', fontSize: '0.7rem', fontWeight: 700, padding: '4px 10px', borderRadius: 20, display: 'inline-block', marginRight: 8, marginBottom: 8 }}>
+   963→   963→                            {exam}
+   964→   964→                          </span>
+   965→   965→                        ))}
+   966→   966→                      </div>
+   967→   967→                    ) : null}
+   968→   968→
+   969→   969→                    <div className="batch-grid-info">
+   970→   970→                      <div className="bg-info-box"><span className="lbl">Class</span><span className="val">{batchInfo.className || 'General'}</span></div>
+   971→   971→                      <div className="bg-info-box"><span className="lbl">Language</span><span className="val">{batchInfo.language || 'Hinglish'}</span></div>
+   972→   972→                      <div className="bg-info-box"><span className="lbl">Start Date</span><span className="val">{sDate}</span></div>
+   973→   973→                      <div className="bg-info-box"><span className="lbl">End Date</span><span className="val">{eDate}</span></div>
+   974→   974→                    </div>
+   975→   975→
+   976→   976→                    {isEnrolled ? (
+   977→   977→                      <>
+   978→   978→                        <button className="btn btn-sb-dark w-100 mt-4 fw-bold rounded-pill" onClick={() => studyBatch(batchInfo._id)}>
+   979→   979→                          <i className="fas fa-book-open me-2"></i> Study This Batch
+   980→   980→                        </button>
+   981→   981→                        <button className="btn btn-outline-danger w-100 mt-3 fw-bold rounded-pill" onClick={() => handleUnenroll(batchInfo._id)}>
+   982→   982→                          <i className="fas fa-sign-out-alt me-2"></i> Unenroll from Batch
+   983→   983→                        </button>
+   984→   984→                      </>
+   985→   985→                    ) : (
+   986→   986→                      <button className="btn btn-sb-dark w-100 mt-4 fw-bold rounded-pill" onClick={() => enrollInBatch(batchInfo._id)}>
+   987→   987→                        <i className="fas fa-graduation-cap me-2"></i> Enroll Now
+   988→   988→                      </button>
+   989→   989→                    )}
+   990→   990→                  </div>
+   991→   991→                </>
+   992→   992→              );
+   993→   993→            })()}
+   994→   994→          </div>
+   995→   995→        </div>
+   996→   996→      </div>
+   997→   997→
+   998→   998→      {/* ================= NOTES MODAL ================= */}
+   999→   999→      <div className={`modal-overlay ${notesOpen ? 'active' : ''}`} id="notes-modal" onClick={(e) => { if (e.target === e.currentTarget) setNotesOpen(false); }}>
+  1000→  1000→        <div className="bottom-sheet">
+  1001→  1001→          <i className="fas fa-times sheet-close" onClick={() => setNotesOpen(false)}></i>
+  1002→  1002→          <h4 style={{ fontWeight: 800, marginBottom: 24, color: 'var(--sb-text-dark)' }}>Attachments</h4>
+  1003→  1003→          <div id="notes-modal-content">
+  1004→  1004→            {notesLoading ? (
+  1005→  1005→              <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+  1006→  1006→            ) : (
+  1007→  1007→              <>
+  1008→  1008→                {noteRows.map((row, i) => (
+  1009→  1009→                  <div className="resource-row" key={`n-${i}`}>
+  1010→  1010→                    <div className="resource-title"><i className="fas fa-file-pdf text-danger"></i> {row.title}</div>
+  1011→  1011→                    <button className="btn-view-pdf" onClick={() => { window.open(row.url, '_blank'); addXP(5, 'Viewed Document'); }}>View</button>
+  1012→  1012→                  </div>
+  1013→  1013→                ))}
+  1014→  1014→                {noteRows.length === 0 && !notesLoading ? (
+  1015→  1015→                  <p className="text-muted text-center">No resources attached.</p>
+  1016→  1016→                ) : null}
+  1017→  1017→              </>
+  1018→  1018→            )}
+  1019→  1019→          </div>
+  1020→  1020→        </div>
+  1021→  1021→      </div>
+  1022→  1022→
+  1023→  1023→      {/* ================= DPP MODE MODAL ================= */}
+  1024→  1024→      <div className={`modal-overlay ${dppOpen ? 'active' : ''}`} id="dpp-modal" onClick={(e) => { if (e.target === e.currentTarget) setDppOpen(false); }}>
+  1025→  1025→        <div className="bottom-sheet">
+  1026→  1026→          <i className="fas fa-times sheet-close" onClick={() => setDppOpen(false)}></i>
+  1027→  1027→          <h4 style={{ fontWeight: 800, marginBottom: 24, color: 'var(--sb-text-dark)' }}>Choose Attempt Mode</h4>
+  1028→  1028→          <div id="dpp-modal-content" className="d-flex flex-column gap-3">
+  1029→  1029→            <div className="resource-row" style={{ background: '#eff6ff', border: '1px solid #2563eb', cursor: 'pointer' }} onClick={() => dppMeta && launchQuiz({ testId: dppMeta.testId, scheduleId: dppMeta.scheduleId, subjectId: dppMeta.subjectId, title: dppMeta.name })} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' && dppMeta) launchQuiz({ testId: dppMeta.testId, scheduleId: dppMeta.scheduleId, subjectId: dppMeta.subjectId, title: dppMeta.name }); }}>
+  1030→  1030→              <div>
+  1031→  1031→                <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#2563eb' }}>Practice Mode</div>
+  1032→  1032→                <div style={{ fontSize: '0.8rem', color: 'var(--sb-text-dark)', marginTop: 4 }}>Learn without time pressure</div>
+  1033→  1033→              </div>
+  1034→  1034→              <i className="fas fa-chevron-right" style={{ color: '#2563eb' }}></i>
+  1035→  1035→            </div>
+  1036→  1036→            <div className="resource-row" style={{ background: '#fef2f2', border: '1px solid #e11d48', cursor: 'pointer' }} onClick={() => dppMeta && launchQuiz({ testId: dppMeta.testId, scheduleId: dppMeta.scheduleId, subjectId: dppMeta.subjectId, title: dppMeta.name })} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === 'Enter' && dppMeta) launchQuiz({ testId: dppMeta.testId, scheduleId: dppMeta.scheduleId, subjectId: dppMeta.subjectId, title: dppMeta.name }); }}>
+  1037→  1037→              <div>
+  1038→  1038→                <div style={{ fontWeight: 800, fontSize: '1.1rem', color: '#e11d48' }}>Quiz Mode</div>
+  1039→  1039→                <div style={{ fontSize: '0.8rem', color: 'var(--sb-text-dark)', marginTop: 4 }}>Attempt with standard timing</div>
+  1040→  1040→              </div>
+  1041→  1041→              <i className="fas fa-chevron-right" style={{ color: '#e11d48' }}></i>
+  1042→  1042→            </div>
+  1043→  1043→          </div>
+  1044→  1044→        </div>
+  1045→  1045→      </div>
+  1046→  1046→
+  1047→  1047→      {/* ================= TEST INSTRUCTIONS MODAL ================= */}
+  1048→  1048→      <div className={`modal-overlay ${instructions.open ? 'active' : ''}`} onClick={(e) => { if (e.target === e.currentTarget) setInstructions({ open: false, loading: false, title: '', html: '' }); }}>
+  1049→  1049→        <div className="bottom-sheet" style={{ maxHeight: '80vh' }}>
+  1050→  1050→          <i className="fas fa-times sheet-close" onClick={() => setInstructions({ open: false, loading: false, title: '', html: '' })}></i>
+  1051→  1051→          <h4 style={{ fontWeight: 800, marginBottom: 16, color: 'var(--sb-text-dark)' }}>{instructions.title}</h4>
+  1052→  1052→          {instructions.loading ? (
+  1053→  1053→            <div className="loader-center"><i className="fas fa-spinner fa-spin"></i></div>
+  1054→  1054→          ) : (
+  1055→  1055→            <div
+  1056→  1056→              style={{ maxHeight: '55vh', overflowY: 'auto', fontSize: '0.9rem', color: 'var(--sb-text-dark)', lineHeight: 1.6 }}
+  1057→  1057→              className="instructions-body"
+  1058→  1058→              dangerouslySetInnerHTML={{ __html: instructions.html }}
+  1059→  1059→            />
+  1060→  1060→          )}
+  1061→  1061→        </div>
+  1062→  1062→      </div>
+  1063→  1063→
+  1064→  1064→      {/* ================= QUIZ IFRAME MODAL ================= */}
+  1065→  1065→      <div className={`iframe-overlay ${testFrame.open ? 'active' : ''}`} id="test-iframe-modal">
+  1066→  1066→        <div className="iframe-header">
+  1067→  1067→          <h5 className="m-0" style={{ fontWeight: 800, color: 'var(--sb-text-dark)' }}>{testFrame.title}</h5>
+  1068→  1068→          <button className="btn btn-sm btn-danger fw-bold rounded-pill px-3" onClick={() => setTestFrame({ open: false, url: '', title: 'Test Attempt' })}>
+  1069→  1069→            <i className="fas fa-times me-1"></i> Close
+  1070→  1070→          </button>
+  1071→  1071→        </div>
+  1072→  1072→        <iframe id="test-iframe" className="iframe-content" src={testFrame.open ? testFrame.url : undefined} title={testFrame.title} />
+  1073→  1073→      </div>
+  1074→  1074→    </>
+  1075→  1075→  );
+  1076→  1076→}
+  1077→  1077→

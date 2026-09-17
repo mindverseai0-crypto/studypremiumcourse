@@ -1,0 +1,8 @@
+{
+  "_comment": "Manual seed: folder -> CloudFront signed query (?Signature=\u2026&Key-Pair-Id=\u2026&Policy=\u2026). Entries whose Policy DateLessThan epoch has passed are ignored automatically. Fresh signatures pasted here become playable instantly.",
+  "a558fffd-9f3f-4334-ac96-50c13dd2cfc7": {
+    "query": "Signature=jNepjtfmz52QXRhnbc6fpfUzjhRJrHDPwrRYYh9crNIgJvqy3cmNSfCiNsaiPmQEHFa6EJ8tKNBPlUufLmbSNugAsyFjW5yRJixcxLF0QWcjvEy%7ElUd9dPNXMZ0ZCGq7cCiOjxPn200yPolUMpQlfnzVTks3%7EcAFFiwUZS9dvZ5ssTOpmIJoDsuCqbvEqnYl1-JWIHuRfGO3sVAjl1Mm-cEbbavfCc5Lavgwa9YieCV%7EopvKuLW8HqEytkZE2yzjZkVEughljmlL-jFIonuSNUNZrhlRtg7aX31xjENZ4lRj2-EqGoXezLr4WDzTqilIHV9pZ%7EuWDrtlAqlD0efXGg__&Key-Pair-Id=APKAXVKMENFCRKTG5XE2&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9kMWQzNHA4dno2M29pcS5jbG91ZGZyb250Lm5ldC9hNTU4ZmZmZC05ZjNmLTQzMzQtYWM5Ni01MGMxM2RkMmNmYzcvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4ODcyNjMyN30sIkRhdGVHcmVhdGVyVGhhbiI6eyJBV1M6RXBvY2hUaW1lIjo1NzY2ODAxMX19fV19",
+    "registeredAt": 1789000000000,
+    "expiresAt": 1788726327000
+  }
+}

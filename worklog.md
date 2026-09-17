@@ -324,3 +324,21 @@ Stage Summary:
 - New capability: paste a signed lecture URL in the player error state → registers server-side (persisted to db/pw-signatures.json, seeded from builtin fallbacks, survives restarts) → instant playback
 - E2E verified via agent-browser: failing lecture shows clear error + recovery form; pasting the dd3326fa signed URL → manifest probed OK, ClearKeys resolved, video PLAYED (readyState 4, currentTime advancing, real frames + subtitles, duration 1789s); 64 segment 200s in dev.log; home page regression-free (21 cards); lint clean
 - Store file db/pw-signatures.json currently holds dd3326fa (exp 1789589599, source manual)
+
+---
+Task ID: restore-local-state-3
+Agent: Z.ai Code (main)
+Task: Fix build error "Module not found: Can't resolve '@/lib/local-state'" (studybison-app.tsx:24 + player/page.tsx:12) — third sandbox revert lost the module while consumers survived
+
+Work Log:
+- Diagnosed: another snapshot revert deleted src/lib/local-state.ts; this time the delta-lane work SURVIVED (pw-cdn.ts 18:01, signature-store.ts 18:04 present) — only local-state needed rebuilding
+- Rebuilt src/lib/local-state.ts from the restore-local-state-2 spec: useSyncExternalStore + cachedList() memoizing parsed arrays per raw localStorage string (stable getSnapshot refs), module-level EMPTY_LIST for getServerSnapshot (SSR-safe), shared subscribe() on sb-enrolled-changed / sb-watched-changed / sb-xp-changed + native storage event (cross-component AND cross-tab), writes fire events only on actual change (idempotent enroll); keys pw_enrolled_batches / pw_watched_videos / pw_xp kept
+- API surface matched to consumers: useEnrolledBatches(){enrolled,enroll,unenroll}, useWatchedVideos(){watched,toggleWatched→boolean added}, useXP()→number, addXP(amount, reason?) with single-replace floating toast — toast is now SELF-CONTAINED (injects #sb-xp-toast-style stylesheet + .sb-xp-toast pill element, dark pill/amber text, Web Animations API 2.4s cubic-bezier, safe-area-inset aware) since globals.css has no .xp-toast rules
+- BUG CAUGHT DURING E2E: first implementation passed the raw stored STRING into readJSON() as a localStorage KEY (readRaw(raw) → always null → every list parsed as []); symptom: enrollment persisted to storage but the study-view batch dropdown still showed "No batch enrolled". Fixed cachedList() to JSON.parse the raw string directly; removed dead readJSON helper
+- bun run lint: clean; hot-reload compiled, GET / 200
+- E2E (agent-browser, two tabs): enroll Arjuna JEE 2027 → pw_enrolled_batches persisted; reload → batch-dropdown hydrates "Arjuna JEE 2027"; Study This Batch → study-view active; All Classes → PH Physics → CH-07 Parakram Solution → 6 .btn-check-done rows; toggle ON → pw_watched_videos=["6a814116…"], pw_xp=10, toast "+10 XP · Watched Video" animation running, .active class set; toggle OFF → watched=[], XP unchanged at 10 (no double award); toggle ON again → XP=20, chip live "20 XP"; cross-tab: tab2 set pw_xp=77 → BOTH tabs' chips read "77 XP" via storage event; reload in both tabs → chips hydrate 77; screenshot confirms clean home render with enrolled "Study" state; reset test state (xp=0, watched=[], enrollment kept); zero console/page errors
+
+Stage Summary:
+- Build error resolved for the third time; module hardened (self-contained toast styles so future reverts of globals.css can't break the toast)
+- Key debugging lesson for future agents: if persisted state "looks saved but the UI ignores it", suspect the parse layer reading storage under the wrong key — the useSyncExternalStore snapshot must parse the RAW VALUE, not re-read storage
+- Consumers verified: studybison-app.tsx (enroll/unenroll/toggleWatched/addXP ×3/useXP chip) and player/page.tsx (addXP on 90% watched)

@@ -1,0 +1,721 @@
+     1→import { NextRequest, NextResponse } from "next/server";
+     2→import {
+     3→  lxAllBatches, // (re-exported for potential tooling; catalog route uses /api/batches)
+     4→  lxBatchDetails,
+     5→  lxBatchAnnouncements,
+     6→  lxChapters,
+     7→  lxTopicContent,
+     8→  lxTodaySchedule,
+     9→  lxScheduleDetail,
+    10→  lxBatchTests,
+    11→  lxTestInstructions,
+    12→  lxDppList,
+    13→  lxStartDpp,
+    14→  lxVideoUrl,
+    15→  lxOtp,
+    16→  LxScheduleItem,
+    17→  LxContentType,
+    18→} from "@/lib/lx-api";
+    19→import { registerSignedFolder, folderFromUrl, hostFromUrl } from "@/lib/pw-cdn";
+    20→
+    21→void lxAllBatches; // catalog lives in /api/batches
+    22→
+    23→export const dynamic = "force-dynamic";
+    24→
+    25→// Shared CORS headers (same-origin frontend normally, kept for safety).
+    26→const CORS_HEADERS: Record<string, string> = {
+    27→  "Access-Control-Allow-Origin": "*",
+    28→  "Access-Control-Allow-Headers": "Content-Type",
+    29→  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    30→};
+    31→
+    32→export async function OPTIONS() {
+    33→  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+    34→}
+    35→
+    36→type Params = Record<string, unknown>;
+    37→
+    38→interface ActionBody {
+    39→  action?: unknown;
+    40→  params?: unknown;
+    41→  method?: unknown;
+    42→  payload?: unknown;
+    43→}
+    44→
+    45→const asParams = (v: unknown): Params =>
+    46→  v && typeof v === "object" && !Array.isArray(v) ? (v as Params) : {};
+    47→
+    48→const str = (v: unknown, fallback = ""): string =>
+    49→  v === undefined || v === null ? fallback : String(v);
+    50→
+    51→const num = (v: unknown, fallback: number): number => {
+    52→  const n = Number(v);
+    53→  return Number.isFinite(n) ? n : fallback;
+    54→};
+    55→
+    56→/** Payload may arrive as object or JSON string. */
+    57→function parsePayload(payload: unknown): unknown {
+    58→  if (typeof payload === "string") {
+    59→    try {
+    60→      return JSON.parse(payload);
+    61→    } catch {
+    62→      return payload;
+    63→    }
+    64→  }
+    65→  return payload;
+    66→}
+    67→
+    68→// ---------------------------------------------------------------------------
+    69→// upstream → protocol transforms
+    70→// ---------------------------------------------------------------------------
+    71→
+    72→function asArray(v: unknown): unknown[] {
+    73→  return Array.isArray(v) ? v : v ? [v] : [];
+    74→}
+    75→
+    76→/** PDF attachments are baked as /api/lxpdf links that resolve the real file. */
+    77→function pdfAttachmentRef(batchId: string, subjectId: string, pdfId: string, attachmentId: string) {
+    78→  const q = `batchId=${encodeURIComponent(batchId)}&subjectId=${encodeURIComponent(
+    79→    subjectId,
+    80→  )}&pdfId=${encodeURIComponent(pdfId)}&attachmentId=${encodeURIComponent(attachmentId)}`;
+    81→  return { baseUrl: `/api/lxpdf?${q}`, key: "", _id: attachmentId };
+    82→}
+    83→
+    84→function subjectRef(s: unknown): { _id: string; slug: string; name: string } {
+    85→  if (s && typeof s === "object") {
+    86→    const o = s as { _id?: string; slug?: string; name?: string };
+    87→    return { _id: o._id || "", slug: o.slug || o._id || "", name: o.name || "" };
+    88→  }
+    89→  return { _id: String(s || ""), slug: String(s || ""), name: "" };
+    90→}
+    91→
+    92→function eventStatus(item: LxScheduleItem, startIso: string, endIso: string): string {
+    93→  const tag = String(item.tag || "").toLowerCase();
+    94→  if (tag === "live" || tag === "live now") return "LIVE";
+    95→  if (tag === "upcoming") return "UPCOMING";
+    96→  if (tag === "ended" || tag === "cancelled") return tag === "cancelled" ? "CANCELLED" : "ENDED";
+    97→  const now = Date.now();
+    98→  const s = new Date(startIso || "").getTime();
+    99→  const e = new Date(endIso || "").getTime();
+   100→  if (Number.isFinite(s) && Number.isFinite(e)) {
+   101→    if (now >= s && now <= e) return "LIVE";
+   102→    if (now < s) return "UPCOMING";
+   103→  }
+   104→  return "ENDED";
+   105→}
+   106→
+   107→function scheduleEventNode(batchId: string, item: LxScheduleItem) {
+   108→  const startIso = item.startTime || item.date || "";
+   109→  const endIso = item.endTime || "";
+   110→  const subj = subjectRef(item.subjectId);
+   111→  const image =
+   112→    (item.videoDetails && item.videoDetails.image) || item.previewImageUrl || "";
+   113→  return {
+   114→    _id: item._id || "",
+   115→    type: "LECTURE",
+   116→    data: {
+   117→      _id: item._id || "",
+   118→      topic: item.topic || item.name || "Class",
+   119→      startTime: startIso,
+   120→      endTime: endIso,
+   121→      status: eventStatus(item, startIso, endIso),
+   122→      lectureType: item.lectureType || "",
+   123→      urlType: item.urlType || "",
+   124→      url: item.url || "",
+   125→      videoDetails: { _id: item._id || "", image },
+   126→      subjectId: { _id: subj._id, slug: subj.slug },
+   127→      slug: item.slug || "",
+   128→      homeworkIds: [],
+   129→      exerciseIds: [],
+   130→      batchId,
+   131→    },
+   132→  };
+   133→}
+   134→
+   135→function contentNodesFromItems(
+   136→  batchId: string,
+   137→  subjectId: string,
+   138→  items: LxScheduleItem[],
+   139→  kind: "LECTURE" | "DPP_VIDEOS" | "NOTES",
+   140→): Array<{ _id: string; type: string; data: Record<string, unknown> }> {
+   141→  const nodes: Array<{ _id: string; type: string; data: Record<string, unknown> }> = [];
+   142→  for (const item of items) {
+   143→    const pdfId = item._id || "";
+   144→
+   145→    if (kind === "LECTURE" || kind === "DPP_VIDEOS") {
+   146→      const vd = item.videoDetails || {};
+   147→      nodes.push({
+   148→        _id: item._id || "",
+   149→        type: kind,
+   150→        data: {
+   151→          _id: item._id || "",
+   152→          topic: item.topic || vd.name || item.name || "Lecture",
+   153→          date: item.date || item.startTime || "",
+   154→          urlType: item.urlType || "",
+   155→          url: item.url || "",
+   156→          videoDetails: {
+   157→            _id: item._id || "",
+   158→            image: vd.image || item.previewImageUrl || "",
+   159→            videoUrl: "",
+   160→            duration: vd.duration || "",
+   161→          },
+   162→          homeworkIds: asArray(item.homeworkIds).flatMap((hw) => {
+   163→            const h = hw as { _id?: string; topic?: string; attachmentIds?: unknown[] };
+   164→            return asArray(h.attachmentIds).map((att) => {
+   165→              const a = att as { _id?: string };
+   166→              return {
+   167→                _id: h._id || "",
+   168→                topic: h.topic || "Class Note",
+   169→                attachmentIds: [pdfAttachmentRef(batchId, subjectId, pdfId, a._id || "")],
+   170→              };
+   171→            });
+   172→          }),
+   173→          exerciseIds: [],
+   174→        },
+   175→      });
+   176→      continue;
+   177→    }
+   178→
+   179→    // NOTES / DppNotes → PDF cards
+   180→    const atts: Array<Record<string, unknown>> = [];
+   181→    let title = item.topic || item.name || "";
+   182→    const homeworkSources = [
+   183→      ...asArray(item.homeworkIds),
+   184→      ...asArray(item.dpp?.homeworkIds),
+   185→    ];
+   186→    for (const hw of homeworkSources) {
+   187→      const h = hw as { _id?: string; topic?: string; attachmentIds?: unknown[] };
+   188→      if (!title && h.topic) title = h.topic;
+   189→      for (const att of asArray(h.attachmentIds)) {
+   190→        const a = att as { _id?: string; key?: string; baseUrl?: string; name?: string };
+   191→        if (!a?._id) continue;
+   192→        if (!title) title = a.name || "";
+   193→        // some attachments already carry a real static.pw.live key
+   194→        const direct = a.baseUrl && a.key ? `${a.baseUrl}${a.key}` : "";
+   195→        const ref = direct
+   196→          ? { baseUrl: direct, key: "", _id: a._id }
+   197→          : pdfAttachmentRef(batchId, subjectId, pdfId, a._id);
+   198→        atts.push({
+   199→          _id: a._id,
+   200→          topic: h.topic || a.name || item.topic || item.name || "Study Material",
+   201→          attachmentIds: [ref],
+   202→        });
+   203→      }
+   204→    }
+   205→    if (atts.length === 0) continue;
+   206→    nodes.push({
+   207→      _id: item._id || "",
+   208→      type: "NOTES",
+   209→      data: {
+   210→        _id: item._id || "",
+   211→        topic: title || "Study Material",
+   212→        date: item.date || item.startTime || "",
+   213→        homeworkIds: atts,
+   214→      },
+   215→    });
+   216→  }
+   217→  return nodes;
+   218→}
+   219→
+   220→function resolveContentKind(contentType: string): "LECTURE" | "DPP_VIDEOS" | "NOTES" | null {
+   221→  switch ((contentType || "ALL").toUpperCase()) {
+   222→    case "ALL":
+   223→    case "LECTURE":
+   224→      return "LECTURE";
+   225→    case "DPP_VIDEOS":
+   226→      return "DPP_VIDEOS";
+   227→    case "NOTES":
+   228→    case "DPP_PDF":
+   229→      return "NOTES";
+   230→    default:
+   231→      return null;
+   232→  }
+   233→}
+   234→
+   235→function upstreamContentType(contentType: string): LxContentType {
+   236→  switch ((contentType || "ALL").toUpperCase()) {
+   237→    case "DPP_VIDEOS":
+   238→      return "DppVideos";
+   239→    case "DPP_PDF":
+   240→      return "DppNotes";
+   241→    case "NOTES":
+   242→      return "notes";
+   243→    default:
+   244→      return "videos";
+   245→  }
+   246→}
+   247→
+   248→/** base64url-encode a signed query for the stateless /s/<sig>/ relay path. */
+   249→function sigPathSegment(signedQuery: string): string {
+   250→  const q = signedQuery.startsWith("?") ? signedQuery.slice(1) : signedQuery;
+   251→  if (!q) return "";
+   252→  return Buffer.from(q, "utf8").toString("base64url");
+   253→}
+   254→
+   255→/** Resolve a video → same-origin playable payload (dash/hls/youtube/mp4). */
+   256→async function resolveVideoPayload(childId: string, batchId: string, subjectId: string) {
+   257→  const vid = await lxVideoUrl(batchId, subjectId, childId);
+   258→  if (vid?.url) {
+   259→    const url = vid.url.trim();
+   260→    if (/\.mpd(\?|$)/i.test(url)) {
+   261→      const folder = folderFromUrl(url);
+   262→      const sig = sigPathSegment(vid.signedUrl || "");
+   263→      if (folder && sig) registerSignedFolder(folder, vid.signedUrl || "");
+   264→      let clearKeys: Record<string, string> | null = null;
+   265→      try {
+   266→        const mpdUrl = `${url}${vid.signedUrl || ""}`;
+   267→        const controller = new AbortController();
+   268→        const timer = setTimeout(() => controller.abort(), 30000);
+   269→        const mpdRes = await fetch(mpdUrl, {
+   270→          cache: "no-store",
+   271→          signal: controller.signal,
+   272→          headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" },
+   273→        });
+   274→        clearTimeout(timer);
+   275→        if (mpdRes.ok) {
+   276→          const text = await mpdRes.text();
+   277→          const kidMatch = text.match(/default_KID="([0-9a-fA-F-]+)"/);
+   278→          if (kidMatch) {
+   279→            clearKeys = await lxOtp(kidMatch[1]);
+   280→          }
+   281→        }
+   282→      } catch {
+   283→        /* keys unavailable — player will surface a decrypt error */
+   284→      }
+   285→      // Stateless relay URL: relative DASH segments inherit the signature.
+   286→      const manifestUrl = folder
+   287→        ? `/api/pw/${folder}${sig ? `/s/${sig}` : ""}/master.mpd`
+   288→        : "";
+   289→      if (!manifestUrl) return null;
+   290→      return {
+   291→        kind: "dash",
+   292→        url: manifestUrl,
+   293→        signedUrl: "",
+   294→        clearKeys,
+   295→        poster: "",
+   296→        drmDetails: null,
+   297→      };
+   298→    }
+   299→    if (/\.m3u8(\?|$)/i.test(url)) {
+   300→      const folder = folderFromUrl(url);
+   301→      const sig = sigPathSegment(vid.signedUrl || "");
+   302→      if (!folder) return null;
+   303→      if (sig) registerSignedFolder(folder, vid.signedUrl || "");
+   304→      // Root-level LIVE manifest (…/index.m3u8?Signature=… — no uuid folder):
+   305→      // each live class gets its own channel like this, on its own live host.
+   306→      // The host is embedded in the relay path (validated against an
+   307→      // allowlist in pw-cdn); the manifest itself is the relayed asset and
+   308→      // segments resolve as its siblings through the same /s/<sig>/ path.
+   309→      const isUuidFolder = /^[a-f0-9-]{16,}$/i.test(folder);
+   310→      if (!isUuidFolder && /^[A-Za-z0-9._-]+\.m3u8$/i.test(folder)) {
+   311→        const liveHost = hostFromUrl(url);
+   312→        return {
+   313→          kind: "hls",
+   314→          url: `/api/pw/h/${liveHost}/${folder}${sig ? `/s/${sig}` : ""}`,
+   315→          signedUrl: "",
+   316→          clearKeys: null,
+   317→          poster: "",
+   318→          drmDetails: null,
+   319→        };
+   320→      }
+   321→      return {
+   322→        kind: "hls",
+   323→        url: `/api/pw/${folder}${sig ? `/s/${sig}` : ""}/master.m3u8`,
+   324→        signedUrl: "",
+   325→        clearKeys: null,
+   326→        poster: "",
+   327→        drmDetails: null,
+   328→      };
+   329→    }
+   330→    if (/youtube\.com|youtu\.be/i.test(url)) {
+   331→      return { kind: "youtube", url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+   332→    }
+   333→    // plain file (mp4 etc.) inside the signed folder
+   334→    const folder = folderFromUrl(url);
+   335→    const sig = sigPathSegment(vid.signedUrl || "");
+   336→    if (folder) {
+   337→      if (sig) registerSignedFolder(folder, vid.signedUrl || "");
+   338→      const fileName = url.split("/").pop() || "video.mp4";
+   339→      return {
+   340→        kind: "mp4",
+   341→        url: `/api/pw/${folder}${sig ? `/s/${sig}` : ""}/${fileName}`,
+   342→        signedUrl: "",
+   343→        clearKeys: null,
+   344→        poster: "",
+   345→        drmDetails: null,
+   346→      };
+   347→    }
+   348→    return { kind: "mp4", url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+   349→  }
+   350→
+   351→  // No signed stream — maybe a youtube lecture.
+   352→  if (subjectId) {
+   353→    const detail = await lxScheduleDetail(batchId, subjectId, childId);
+   354→    const url = detail?.url || "";
+   355→    if (url && /youtube\.com|youtu\.be/i.test(url)) {
+   356→      return { kind: "youtube", url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+   357→    }
+   358→  }
+   359→  return null;
+   360→}
+   361→
+   362→// ---------------------------------------------------------------------------
+   363→// POST /api/data — action API (real upstream data, transformed)
+   364→// ---------------------------------------------------------------------------
+   365→export async function POST(request: NextRequest) {
+   366→  try {
+   367→    const body = (await request.json().catch(() => ({}))) as ActionBody;
+   368→    const action = typeof body.action === "string" ? body.action : "";
+   369→    const params = asParams(body.params);
+   370→    const payload = parsePayload(body.payload);
+   371→
+   372→    switch (action) {
+   373→      case "pw_btch_dtl": {
+   374→        const batchId = str(params.batchId).trim();
+   375→        if (!batchId) return NextResponse.json({ success: false }, { headers: CORS_HEADERS });
+   376→        const d = await lxBatchDetails(batchId);
+   377→        if (!d) return NextResponse.json({ success: false }, { headers: CORS_HEADERS });
+   378→
+   379→        const exams = Array.isArray(d.exam)
+   380→          ? (d.exam as unknown[])
+   381→              .map((e) => (typeof e === "string" ? e : (e as { name?: string })?.name || ""))
+   382→              .filter(Boolean)
+   383→          : [];
+   384→        const subjects = Array.isArray(d.subjects) ? d.subjects : [];
+   385→        return NextResponse.json(
+   386→          {
+   387→            success: true,
+   388→            data: {
+   389→              _id: d._id || batchId,
+   390→              id: d.slug || batchId,
+   391→              name: d.name || "Batch",
+   392→              byName: d.byName || "",
+   393→              description: typeof d.description === "string" ? d.description : "",
+   394→              imageUrl: d.previewImage || d.previewImageUrl || "",
+   395→              exams,
+   396→              language: d.language || "",
+   397→              className:
+   398→                typeof d.class === "string"
+   399→                  ? d.class
+   400→                  : Array.isArray(d.class)
+   401→                    ? (d.class as unknown[]).map((c) => String(c)).join(", ")
+   402→                    : "",
+   403→              amount: typeof d.feeTotal === "number" ? d.feeTotal : null,
+   404→              startDate: d.startDate || "",
+   405→              endDate: d.endDate || "",
+   406→              // subject mapping — subjectId = SLUG (SubjectInfo/TopicInfo are
+   407→              // slug-addressed), batchSubjectId & masterId for dpp/schedule apis
+   408→              subjects: subjects.map((s) => ({
+   409→                _id: s.slug || s.subjectId || s._id || "",
+   410→                subject: s.subject || "",
+   411→                subjectId: s.slug || s.subjectId || "",
+   412→                batchSubjectId: s._id || "",
+   413→                masterId: s.subjectId || "",
+   414→              })),
+   415→            },
+   416→          },
+   417→          { headers: CORS_HEADERS },
+   418→        );
+   419→      }
+   420→
+   421→      case "pw_sub_topics": {
+   422→        const batchId = str(params.batchId).trim();
+   423→        const subjectId = str(params.subjectId).trim();
+   424→        const page = num(params.page, 1);
+   425→        if (!batchId || !subjectId) {
+   426→          return NextResponse.json({ success: true, data: { data: [] } }, { headers: CORS_HEADERS });
+   427→        }
+   428→        try {
+   429→          const chapters = await lxChapters(batchId, subjectId, page);
+   430→          const data = chapters.map((c, i) => ({
+   431→            _id: c._id || "",
+   432→            name: c.name || "Chapter",
+   433→            typeId: subjectId,
+   434→            notes: Number(c.notes || 0),
+   435→            videos: Number(c.videos || c.lectureVideos || 0),
+   436→            exercises: Number(c.exercises || 0),
+   437→            order: Number.isFinite(c.displayOrder) ? Number(c.displayOrder) : i,
+   438→          }));
+   439→          return NextResponse.json({ success: true, data: { data } }, { headers: CORS_HEADERS });
+   440→        } catch {
+   441→          return NextResponse.json({ success: true, data: { data: [] } }, { headers: CORS_HEADERS });
+   442→        }
+   443→      }
+   444→
+   445→      case "pw_res_topics":
+   446→        // upstream has no separate resource folders
+   447→        return NextResponse.json({ success: true, data: { data: [] } }, { headers: CORS_HEADERS });
+   448→
+   449→      case "pw_sch_cntnt": {
+   450→        const batchId = str(params.batchId).trim();
+   451→        const subjectId = str(params.subjectId).trim();
+   452→        const tagId = str(params.tagId).trim();
+   453→        const contentType = str(params.contentType, "ALL");
+   454→        const page = num(params.page, 1);
+   455→        if (!batchId || !subjectId || !tagId) {
+   456→          return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
+   457→        }
+   458→        const kind = resolveContentKind(contentType);
+   459→        if (!kind) return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
+   460→        try {
+   461→          const items = await lxTopicContent(batchId, subjectId, tagId, upstreamContentType(contentType), page);
+   462→          const nodes = contentNodesFromItems(batchId, subjectId, items, kind);
+   463→          return NextResponse.json({ success: true, data: nodes }, { headers: CORS_HEADERS });
+   464→        } catch {
+   465→          return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
+   466→        }
+   467→      }
+   468→
+   469→      case "pw_dpp_lst": {
+   470→        const batchId = str(params.batchId).trim();
+   471→        const batchSubjectId = str(params.batchSubjectId).trim();
+   472→        const chapterId = str(params.chapterId).trim();
+   473→        const page = num(params.page, 1);
+   474→        const limit = num(params.limit, 20);
+   475→        if (!batchId || !batchSubjectId || !chapterId) {
+   476→          return NextResponse.json({ success: true, data: { data: [] } }, { headers: CORS_HEADERS });
+   477→        }
+   478→        try {
+   479→          const items = await lxDppList(batchId, batchSubjectId, chapterId, page, limit);
+   480→          const data = items
+   481→            .map((it) => {
+   482→              const q = it.dppQuizDetails;
+   483→              const t = q?.test;
+   484→              if (!t?._id) return null;
+   485→              return {
+   486→                _id: t._id,
+   487→                name: t.name || "DPP",
+   488→                totalQuestions: Number(t.totalQuestions || 0),
+   489→                totalMarks: Number(t.totalMarks || 0),
+   490→                duration: Number(t.maxDuration || 0) * 60 || 1800,
+   491→                testActivityStatus: "Not Started",
+   492→                testStudentMapping: null,
+   493→                dppQuizDetails: {
+   494→                  contentId: q?.contentId || t._id,
+   495→                  scheduleId: q?.scheduleId || "",
+   496→                  test: {
+   497→                    _id: t._id,
+   498→                    name: t.name || "DPP",
+   499→                    totalQuestions: Number(t.totalQuestions || 0),
+   500→                    totalMarks: Number(t.totalMarks || 0),
+   501→                  },
+   502→                  testStudentMapping: { testActivityStatus: q?.tag || "Start" },
+   503→                },
+   504→              };
+   505→            })
+   506→            .filter(Boolean);
+   507→          return NextResponse.json({ success: true, data: { data } }, { headers: CORS_HEADERS });
+   508→        } catch {
+   509→          return NextResponse.json({ success: true, data: { data: [] } }, { headers: CORS_HEADERS });
+   510→        }
+   511→      }
+   512→
+   513→      case "pw_dpp_start": {
+   514→        // Auth-gated upstream: anonymous calls fail → surfaced honestly.
+   515→        const testId = str(params.testId).trim();
+   516→        const batchId = str(params.batchId).trim();
+   517→        if (!testId || !batchId) {
+   518→          return NextResponse.json(
+   519→            { success: false, error: "testId and batchId are required" },
+   520→            { headers: CORS_HEADERS },
+   521→          );
+   522→        }
+   523→        try {
+   524→          const data = await lxStartDpp({
+   525→            testId,
+   526→            batchId,
+   527→            type: str(params.type, "Start"),
+   528→            scheduleId: str(params.scheduleId),
+   529→            batchScheduleId: str(params.batchScheduleId) || str(params.scheduleId),
+   530→            subjectId: str(params.subjectId),
+   531→          });
+   532→          return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
+   533→        } catch (e) {
+   534→          return NextResponse.json(
+   535→            { success: false, error: e instanceof Error ? e.message : "Failed to start DPP" },
+   536→            { headers: CORS_HEADERS },
+   537→          );
+   538→        }
+   539→      }
+   540→
+   541→      case "pw_test_lst": {
+   542→        const batchId = str(params.batchId).trim();
+   543→        if (!batchId) return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
+   544→        try {
+   545→          const tests = await lxBatchTests(batchId);
+   546→          const data = tests.map((t) => {
+   547→            const o = t as Record<string, unknown>;
+   548→            return {
+   549→              _id: str(o._id),
+   550→              name: str(o.name, "Test"),
+   551→              totalQuestions: Number(o.totalQuestions || 0),
+   552→              totalMarks: Number(o.totalMarks || 0),
+   553→              duration: Number(o.maxDuration || 0) * 60 || 3600,
+   554→              startTime: str(o.startTime),
+   555→              testActivityStatus: "Not Started",
+   556→              testStudentMapping: null,
+   557→              tag2: str(o.tag2, "Start"),
+   558→            };
+   559→          });
+   560→          return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
+   561→        } catch {
+   562→          return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
+   563→        }
+   564→      }
+   565→
+   566→      case "pw_test_dtl": {
+   567→        const testId = str(params.testId).trim();
+   568→        const batchId = str(params.batchId).trim();
+   569→        if (!testId || !batchId) {
+   570→          return NextResponse.json({ success: true, data: null }, { headers: CORS_HEADERS });
+   571→        }
+   572→        const data = await lxTestInstructions(testId, batchId);
+   573→        return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
+   574→      }
+   575→
+   576→      case "pw_sch_dtl": {
+   577→        const batchId = str(params.batchId).trim();
+   578→        const scheduleId = str(params.scheduleId).trim();
+   579→        const subjectId = str(params.subjectId).trim();
+   580→        if (!batchId || !scheduleId || !subjectId) {
+   581→          return NextResponse.json({ success: true, data: null }, { headers: CORS_HEADERS });
+   582→        }
+   583→        const detail = await lxScheduleDetail(batchId, subjectId, scheduleId);
+   584→        if (!detail) return NextResponse.json({ success: true, data: null }, { headers: CORS_HEADERS });
+   585→
+   586→        const homeworkIds = [...asArray(detail.homeworkIds), ...asArray(detail.dpp?.homeworkIds)]
+   587→          .flatMap((hw) => {
+   588→            const h = hw as { _id?: string; topic?: string; attachmentIds?: unknown[] };
+   589→            return asArray(h.attachmentIds).map((att) => {
+   590→              const a = att as { _id?: string; key?: string; baseUrl?: string };
+   591→              if (!a?._id) return null;
+   592→              const direct = a.baseUrl && a.key ? `${a.baseUrl}${a.key}` : "";
+   593→              const ref = direct
+   594→                ? { baseUrl: direct, key: "", _id: a._id }
+   595→                : pdfAttachmentRef(batchId, subjectId, detail._id || scheduleId, a._id);
+   596→              return { _id: h._id || "", topic: h.topic || "Class Note", attachmentIds: [ref] };
+   597→            });
+   598→          })
+   599→            .filter(Boolean) as Array<Record<string, unknown>>;
+   600→
+   601→        return NextResponse.json(
+   602→          {
+   603→            success: true,
+   604→            data: {
+   605→              _id: detail._id || scheduleId,
+   606→              topic: detail.topic || detail.name || "",
+   607→              startTime: detail.startTime || "",
+   608→              endTime: detail.endTime || "",
+   609→              urlType: detail.urlType || "",
+   610→              homeworkIds,
+   611→              exerciseIds: [],
+   612→            },
+   613→          },
+   614→          { headers: CORS_HEADERS },
+   615→        );
+   616→      }
+   617→
+   618→      case "pw_tdy_sch": {
+   619→        const batchId = str(params.batchId).trim();
+   620→        if (!batchId) return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
+   621→        const items = await lxTodaySchedule(batchId);
+   622→        const data = items.map((it) => scheduleEventNode(batchId, it));
+   623→        return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
+   624→      }
+   625→
+   626→      case "pw_notifs": {
+   627→        const batchId = str(params.batchId).trim();
+   628→        const page = num(params.page, 1);
+   629→        if (!batchId) {
+   630→          return NextResponse.json({ success: true, data: [], hasMore: false }, { headers: CORS_HEADERS });
+   631→        }
+   632→        const anns = await lxBatchAnnouncements(batchId, page);
+   633→        const data = anns.map((a) => {
+   634→          const o = a as Record<string, unknown>;
+   635→          return {
+   636→            _id: str(o._id),
+   637→            type: str(o.type, "GENERAL"),
+   638→            heading: str(o.announcement, "").slice(0, 80),
+   639→            announcement: str(o.announcement, ""),
+   640→            scheduleTime: str(o.createdAt || o.updatedAt),
+   641→            isRead: false,
+   642→          };
+   643→        });
+   644→        return NextResponse.json({ success: true, data, hasMore: anns.length >= 20 }, { headers: CORS_HEADERS });
+   645→      }
+   646→
+   647→      case "pw_tchr_dtl":
+   648→        return NextResponse.json({ success: true, data: null }, { headers: CORS_HEADERS });
+   649→
+   650→      case "parcham_vid": {
+   651→        const childId = str(params.childId).trim();
+   652→        const batchId = str(params.batchId).trim();
+   653→        const subjectId = str(params.subjectId).trim();
+   654→        if (!childId || !batchId || !subjectId) {
+   655→          return NextResponse.json({ success: false }, { headers: CORS_HEADERS });
+   656→        }
+   657→        try {
+   658→          const data = await resolveVideoPayload(childId, batchId, subjectId);
+   659→          if (!data) return NextResponse.json({ success: false }, { headers: CORS_HEADERS });
+   660→          return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
+   661→        } catch (e) {
+   662→          return NextResponse.json(
+   663→            { success: false, error: e instanceof Error ? e.message : "Stream resolution failed" },
+   664→            { headers: CORS_HEADERS },
+   665→          );
+   666→        }
+   667→      }
+   668→
+   669→      case "pw_test_map": {
+   670→        // testId may be single or array; can live in params or payload.
+   671→        const payloadParams = asParams(payload);
+   672→        const raw: unknown =
+   673→          params.testId ??
+   674→          payloadParams.testId ??
+   675→          (Array.isArray(payload) ? payload : undefined);
+   676→        const ids: string[] = [];
+   677→        collectTestIds(raw, ids, new Set<string>());
+   678→        const data = ids.map((testId) => ({
+   679→          testId,
+   680→          tag2: "Start",
+   681→          testStudentMapping: {
+   682→            _id: `map_${testId}`,
+   683→            testActivityStatus: "Not Started",
+   684→          },
+   685→        }));
+   686→        return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
+   687→      }
+   688→
+   689→      default:
+   690→        return NextResponse.json(
+   691→          { success: false, error: "Unknown action" },
+   692→          { status: 400, headers: CORS_HEADERS },
+   693→        );
+   694→    }
+   695→  } catch (error) {
+   696→    return NextResponse.json(
+   697→      { success: false, error: error instanceof Error ? error.message : String(error) },
+   698→      { status: 500, headers: CORS_HEADERS },
+   699→    );
+   700→  }
+   701→}
+   702→
+   703→/** Flatten test ids from scalars / arrays / objects ({testId}|{_id}|{id}). */
+   704→function collectTestIds(source: unknown, out: string[], seen: Set<string>): void {
+   705→  if (source === undefined || source === null) return;
+   706→  if (Array.isArray(source)) {
+   707→    source.forEach((item) => collectTestIds(item, out, seen));
+   708→    return;
+   709→  }
+   710→  if (typeof source === "object") {
+   711→    const o = source as Record<string, unknown>;
+   712→    collectTestIds(o.testId ?? o._id ?? o.id, out, seen);
+   713→    return;
+   714→  }
+   715→  const s = String(source).trim();
+   716→  if (s && !seen.has(s)) {
+   717→    seen.add(s);
+   718→    out.push(s);
+   719→  }
+   720→}
+   721→
