@@ -32,6 +32,9 @@ function PlayerInner() {
   const vUrl = params.get('vUrl') || '';
   // real PW video id (videoDetails._id) when it differs from the schedule id
   const realVideoId = params.get('lectureVideoId') || '';
+  // Study Ratna embed — render their play.php player in an iframe
+  const srUrl = params.get('srUrl') || '';
+  const isSrEmbed = Boolean(srUrl);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -321,6 +324,36 @@ function PlayerInner() {
 
   const isPwStream = kind === 'dash' || kind === 'hls';
   const ytId = kind === 'youtube' ? youtubeId(src) : '';
+
+  if (isSrEmbed) {
+    return (
+      <div className="sb-player-root">
+        <div className="video-wrapper">
+          <iframe
+            src={srUrl}
+            title={title}
+            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+            allowFullScreen
+            style={{ width: '100%', height: '100%', border: 0, background: '#000' }}
+          />
+          <div className="controls-overlay">
+            <div className="top-bar">
+              <div className="top-left">
+                <i className="fas fa-arrow-left back-btn" onClick={goBack}></i>
+                <div className="video-title">
+                  {title}
+                  <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.5px', padding: '2px 6px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle' }}>STUDY RATNA</span>
+                </div>
+              </div>
+              <div className="top-icons">
+                <i className="fas fa-expand icon-btn" onClick={toggleFullscreen}></i>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="sb-player-root" ref={wrapperRef}
