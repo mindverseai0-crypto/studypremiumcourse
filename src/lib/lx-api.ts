@@ -84,12 +84,25 @@ function cacheSet(key: string, value: unknown): void {
   getCache.set(key, { at: Date.now(), value });
 }
 
+// single-flight map — concurrent identical requests share ONE upstream call
+const inflight = new Map<string, Promise<unknown>>();
+
 async function cachedJson<T>(key: string, ttlMs: number, loader: () => Promise<T>): Promise<T> {
   const hit = cacheGet<T>(key, ttlMs);
   if (hit !== null) return hit;
-  const value = await loader();
-  cacheSet(key, value);
-  return value;
+  const running = inflight.get(key);
+  if (running) return running as Promise<T>;
+  const p = (async () => {
+    try {
+      const value = await loader();
+      cacheSet(key, value);
+      return value;
+    } finally {
+      inflight.delete(key);
+    }
+  })();
+  inflight.set(key, p);
+  return p;
 }
 
 // ---------------------------------------------------------------------------
@@ -256,10 +269,12 @@ export async function lxBatchAnnouncements(
 export async function lxChapters(batchId: string, subjectSlug: string, page: number): Promise<LxChapter[]> {
   const b = encodeURIComponent(batchId.trim());
   const s = encodeURIComponent(subjectSlug.trim());
-  const res = await lxJson<{ data?: LxChapter[] }>(
-    `/api/SubjectInfo?BatchId=${b}&SubjectId=${s}&page=${Math.max(1, page)}`,
-  );
-  return Array.isArray(res?.data) ? res.data : [];
+  return cachedJson<LxChapter[]>(`ch:${b}:${s}:${Math.max(1, page)}`, 3 * 60_000, async () => {
+    const res = await lxJson<{ data?: LxChapter[] }>(
+      `/api/SubjectInfo?BatchId=${b}&SubjectId=${s}&page=${Math.max(1, page)}`,
+    );
+    return Array.isArray(res?.data) ? res.data : [];
+  });
 }
 
 export type LxContentType = 'videos' | 'notes' | 'DppNotes' | 'DppVideos';
@@ -274,10 +289,16 @@ export async function lxTopicContent(
   const b = encodeURIComponent(batchId.trim());
   const s = encodeURIComponent(subjectSlug.trim());
   const t = encodeURIComponent(chapterId.trim());
-  const res = await lxJson<{ data?: LxScheduleItem[] }>(
-    `/api/TopicInfo?BatchId=${b}&SubjectId=${s}&TopicId=${t}&ContentType=${contentType}&page=${Math.max(1, page)}`,
+  return cachedJson<LxScheduleItem[]>(
+    `tc:${b}:${s}:${t}:${contentType}:${Math.max(1, page)}`,
+    3 * 60_000,
+    async () => {
+      const res = await lxJson<{ data?: LxScheduleItem[] }>(
+        `/api/TopicInfo?BatchId=${b}&SubjectId=${s}&TopicId=${t}&ContentType=${contentType}&page=${Math.max(1, page)}`,
+      );
+      return Array.isArray(res?.data) ? res.data : [];
+    },
   );
-  return Array.isArray(res?.data) ? res.data : [];
 }
 
 // ---------------------------------------------------------------------------
@@ -310,19 +331,21 @@ export async function lxScheduleDetail(
   const b = encodeURIComponent(batchId.trim());
   const s = encodeURIComponent(subjectId.trim());
   const c = encodeURIComponent(contentId.trim());
-  try {
-    const res = await lxJson<{ data?: LxScheduleItem | { data?: LxScheduleItem } }>(
-      `/api/Schedule?BatchId=${b}&SubjectId=${s}&ContentId=${c}`,
-    );
-    const d = res?.data;
-    if (Array.isArray(d)) return (d[0] as LxScheduleItem) ?? null;
-    if (d && typeof d === 'object' && 'data' in (d as Record<string, unknown>)) {
-      return ((d as { data?: LxScheduleItem }).data as LxScheduleItem) ?? null;
+  return cachedJson<LxScheduleItem | null>(`sd:${b}:${s}:${c}`, 5 * 60_000, async () => {
+    try {
+      const res = await lxJson<{ data?: LxScheduleItem | { data?: LxScheduleItem } }>(
+        `/api/Schedule?BatchId=${b}&SubjectId=${s}&ContentId=${c}`,
+      );
+      const d = res?.data;
+      if (Array.isArray(d)) return (d[0] as LxScheduleItem) ?? null;
+      if (d && typeof d === 'object' && 'data' in (d as Record<string, unknown>)) {
+        return ((d as { data?: LxScheduleItem }).data as LxScheduleItem) ?? null;
+      }
+      return (d as LxScheduleItem) ?? null;
+    } catch {
+      return null;
     }
-    return (d as LxScheduleItem) ?? null;
-  } catch {
-    return null;
-  }
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -431,37 +454,45 @@ export async function lxVideoUrl(
   const b = encodeURIComponent(batchId.trim());
   const s = encodeURIComponent(subjectId.trim());
   const v = encodeURIComponent(videoId.trim());
-  try {
-    const res = await lxJson<{ success?: boolean; data?: LxVideoUrl }>(
-      `/api/video-url?batch_id=${b}&subject_id=${s}&video_id=${v}`,
-      undefined,
-      35000,
-    );
-    if (res?.success && res.data?.url) return { url: res.data.url, signedUrl: res.data.signedUrl || '' };
-  } catch {
-    /* fall through */
-  }
-  try {
-    const res = await lxJson<{ success?: boolean; data?: LxVideoUrl }>(
-      `/api/get-video-url?batchId=${b}&subjectId=${s}&childId=${v}`,
-      undefined,
-      35000,
-    );
-    if (res?.data?.url) return { url: res.data.url, signedUrl: res.data.signedUrl || '' };
-  } catch {
-    /* fall through */
-  }
-  return null;
+  // Cached 10 min + single-flight: this endpoint is the slowest hop of the
+  // lecture chain — repeats / StrictMode double-fires must not re-hit it.
+  return cachedJson<LxVideoUrl | null>(`vu:${b}:${s}:${v}`, 10 * 60_000, async () => {
+    try {
+      const res = await lxJson<{ success?: boolean; data?: LxVideoUrl }>(
+        `/api/video-url?batch_id=${b}&subject_id=${s}&video_id=${v}`,
+        undefined,
+        12000,
+      );
+      if (res?.success && res.data?.url) return { url: res.data.url, signedUrl: res.data.signedUrl || '' };
+    } catch {
+      /* fall through */
+    }
+    try {
+      const res = await lxJson<{ success?: boolean; data?: LxVideoUrl }>(
+        `/api/get-video-url?batchId=${b}&subjectId=${s}&childId=${v}`,
+        undefined,
+        12000,
+      );
+      if (res?.data?.url) return { url: res.data.url, signedUrl: res.data.signedUrl || '' };
+    } catch {
+      /* fall through */
+    }
+    return null;
+  });
 }
 
 export async function lxOtp(kid: string): Promise<Record<string, string> | null> {
   const k = encodeURIComponent(kid.trim());
-  try {
-    const res = await lxJson<{ clearKeys?: Record<string, string> }>(`/api/get-otp?kid=${k}`, undefined, 20000);
-    return res?.clearKeys ?? null;
-  } catch {
-    return null;
-  }
+  // ClearKeys are stable per KID — cache for an hour (null results stay
+  // uncached so a transient otp failure retries on the next lecture load).
+  return cachedJson<Record<string, string> | null>(`otp:${k}`, 60 * 60_000, async () => {
+    try {
+      const res = await lxJson<{ clearKeys?: Record<string, string> }>(`/api/get-otp?kid=${k}`, undefined, 15000);
+      return res?.clearKeys ?? null;
+    } catch {
+      return null;
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

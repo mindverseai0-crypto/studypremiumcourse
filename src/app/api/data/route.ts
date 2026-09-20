@@ -26,11 +26,46 @@ import {
   getFallbackSignedQuery,
   fetchSignedAsset,
 } from "@/lib/pw-cdn";
-import { lookupStoredSignature } from "@/lib/signature-store";
+import { lookupStoredSignature, parsePolicy } from "@/lib/signature-store";
 
 void lxAllBatches; // catalog lives in /api/batches
 
 export const dynamic = "force-dynamic";
+
+// ---------------------------------------------------------------------------
+// Latency guards — lecture loading used to run 3-5 serial upstream calls per
+// open (video-url → signer → manifest probe → otp). Everything below makes
+// repeats instant and concurrent loads share one upstream roundtrip.
+// ---------------------------------------------------------------------------
+
+type MemoEntry = { at: number; ttl: number; value: unknown };
+const MEMO_MAX = 400;
+
+function memoGet(map: Map<string, MemoEntry>, key: string): MemoEntry | null {
+  const hit = map.get(key);
+  if (!hit) return null;
+  if (Date.now() - hit.at > hit.ttl) {
+    map.delete(key);
+    return null;
+  }
+  return hit;
+}
+
+function memoSet(map: Map<string, MemoEntry>, key: string, value: unknown, ttl: number): void {
+  if (map.size >= MEMO_MAX) {
+    const oldest = map.keys().next().value;
+    if (oldest) map.delete(oldest);
+  }
+  map.set(key, { at: Date.now(), ttl, value });
+}
+
+/** True when the query has no Policy expiry, or the expiry is still ahead. */
+function nonExpiredQuery(q: string | null): string | null {
+  if (!q) return null;
+  const policy = parsePolicy(q.startsWith("?") ? q : `?${q}`);
+  if (policy?.exp && Math.floor(Date.now() / 1000) >= policy.exp) return null;
+  return q;
+}
 
 // Shared CORS headers (same-origin frontend normally, kept for safety).
 const CORS_HEADERS: Record<string, string> = {
@@ -259,8 +294,24 @@ function upstreamContentType(contentType: string): LxContentType {
  * Direct (unsigned) CloudFront urls per schedule item from the owner's
  * V2 listing API — the same source the production site merges into its
  * content lists. Best-effort: failure simply leaves the nodes untouched.
+ * Memoized 5 min (60s when empty) so chapter revisits skip the roundtrip.
  */
+const v2Memo = new Map<string, MemoEntry>();
+
 async function v2DirectUrls(
+  batchId: string,
+  subjectId: string,
+  tagId: string,
+): Promise<Map<string, { url: string; videoId: string }>> {
+  const memoKey = `${batchId}|${subjectId}|${tagId}`;
+  const hit = memoGet(v2Memo, memoKey);
+  if (hit) return hit.value as Map<string, { url: string; videoId: string }>;
+  const out = await fetchV2DirectUrls(batchId, subjectId, tagId);
+  memoSet(v2Memo, memoKey, out, out.size > 0 ? 5 * 60_000 : 60_000);
+  return out;
+}
+
+async function fetchV2DirectUrls(
   batchId: string,
   subjectId: string,
   tagId: string,
@@ -329,7 +380,7 @@ async function envSignerSignedQuery(
     .replace(/\{subject_id\}/g, encodeURIComponent(subjectId));
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 12000);
+    const timer = setTimeout(() => controller.abort(), 8000);
     const res = await fetch(url, {
       cache: "no-store",
       signal: controller.signal,
@@ -356,6 +407,22 @@ async function envSignerSignedQuery(
   }
 }
 
+/** Per-folder memo for the env signing service (only successes are kept). */
+const envSigMemo = new Map<string, MemoEntry>();
+
+async function envSignerSignedQueryCached(
+  folder: string,
+  batchId: string,
+  videoId: string,
+  subjectId: string,
+): Promise<string> {
+  const hit = memoGet(envSigMemo, `es:${folder}`);
+  if (hit) return hit.value as string;
+  const signed = await envSignerSignedQuery(batchId, videoId, subjectId);
+  if (signed) memoSet(envSigMemo, `es:${folder}`, signed, 10 * 60_000);
+  return signed;
+}
+
 /** Resolve the folder-wide signed query for a video through the whole chain. */
 async function resolveSignedQuery(
   folder: string,
@@ -365,20 +432,24 @@ async function resolveSignedQuery(
     registerSignedFolder(folder, opts.signedUrl);
     return opts.signedUrl.startsWith("?") ? opts.signedUrl : `?${opts.signedUrl}`;
   }
-  const envSig = await envSignerSignedQuery(opts.batchId, opts.videoId, opts.subjectId);
+  // 1) Non-expired LOCAL signatures first — zero network, saves the env
+  //    signer roundtrip (1-12s) on every cold load of a known folder.
+  const local =
+    nonExpiredQuery(getFallbackSignedQuery(folder)) ||
+    nonExpiredQuery(lookupStoredSignature(folder)) ||
+    nonExpiredQuery(getSignedQuery(folder));
+  if (local) {
+    registerSignedFolder(folder, local);
+    return local;
+  }
+  // 2) Env signing service (memoized per folder, 8s cap).
+  const envSig = await envSignerSignedQueryCached(folder, opts.batchId, opts.videoId, opts.subjectId);
   if (envSig) {
     registerSignedFolder(folder, envSig);
     return envSig;
   }
-  const fb = getFallbackSignedQuery(folder);
-  if (fb) {
-    registerSignedFolder(folder, fb);
-    return fb;
-  }
-  const stored = lookupStoredSignature(folder);
-  if (stored) return stored;
-  const cached = getSignedQuery(folder);
-  return cached || "";
+  // Nothing usable — let the caller decide (upstream signedUrl retry, error).
+  return "";
 }
 
 /**
@@ -402,6 +473,98 @@ async function relayUrlFor(
   return { url: `/api/pw${hostSeg}/${folder}${sig ? `/s/${sig}` : ""}/${sub}`, signedQuery };
 }
 
+/**
+ * ClearKey cache — the KID and keys are stable per video folder, but probing
+ * the manifest through the lane chain + otp can cost up to ~30s. Memoize per
+ * folder (60 min for keys, 60s negative) with single-flight.
+ */
+const folderKeysMemo = new Map<string, MemoEntry>();
+const folderKeysInflight = new Map<string, Promise<Record<string, string> | null>>();
+
+async function clearKeysForFolder(
+  folder: string,
+  host: string,
+  manifestPath: string,
+  signedQuery: string,
+): Promise<Record<string, string> | null> {
+  if (!folder) return null;
+  const hit = memoGet(folderKeysMemo, `ck:${folder}`);
+  if (hit) return hit.value as Record<string, string> | null;
+  const running = folderKeysInflight.get(folder);
+  if (running) return running;
+  const p = (async () => {
+    try {
+      // Probe the manifest through the same upstream lane chain the relay
+      // uses (delta → pearl → direct) to extract the ClearKey KID. 8s per
+      // lane keeps a dead-lane worst case bounded.
+      const mpdRes = await fetchSignedAsset(host, manifestPath, signedQuery, { timeoutMs: 8000 });
+      if (!mpdRes.ok) return null;
+      const text = await mpdRes.text();
+      const kidMatch = text.match(/default_KID="([0-9a-fA-F-]+)"/);
+      if (!kidMatch) return null;
+      const keys = await lxOtp(kidMatch[1]);
+      if (keys && Object.keys(keys).length > 0) {
+        memoSet(folderKeysMemo, `ck:${folder}`, keys, 60 * 60_000);
+        return keys;
+      }
+      // keys unavailable right now — brief negative cache so a retry soon
+      // after isn't blocked, but the next cold load re-probes.
+      memoSet(folderKeysMemo, `ck:${folder}`, null, 60_000);
+      return null;
+    } catch {
+      return null;
+    } finally {
+      folderKeysInflight.delete(folder);
+    }
+  })();
+  folderKeysInflight.set(folder, p);
+  return p;
+}
+
+type VideoPayload = {
+  kind: "dash" | "hls" | "youtube" | "mp4";
+  url: string;
+  signedUrl: string;
+  clearKeys: Record<string, string> | null;
+  poster: string;
+  drmDetails: null;
+};
+
+/** Build a same-origin playable payload for a resolved manifest/file url. */
+async function payloadFromRawUrl(
+  rawUrl: string,
+  upstreamSignedUrl: string,
+  sigOpts: { batchId: string; videoId: string; subjectId: string },
+): Promise<VideoPayload | null> {
+  const url = rawUrl.trim();
+  if (!url) return null;
+  if (/\.mpd(\?|$)/i.test(url)) {
+    const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: upstreamSignedUrl });
+    if (!relay) return null;
+    let clearKeys: Record<string, string> | null = null;
+    try {
+      const u = new URL(url);
+      const folder = folderFromUrl(url);
+      clearKeys = await clearKeysForFolder(folder, u.host, u.pathname.replace(/^\/+/, ""), relay.signedQuery);
+    } catch {
+      /* keys unavailable — player will surface a decrypt error */
+    }
+    return { kind: "dash", url: relay.url, signedUrl: "", clearKeys, poster: "", drmDetails: null };
+  }
+  if (/\.m3u8(\?|$)/i.test(url)) {
+    const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: upstreamSignedUrl });
+    if (!relay) return null;
+    return { kind: "hls", url: relay.url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+  }
+  if (/youtube\.com|youtu\.be/i.test(url)) {
+    return { kind: "youtube", url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+  }
+  // plain file (mp4 etc.) inside the signed folder
+  const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: upstreamSignedUrl });
+  if (!relay) return null;
+  return { kind: "mp4", url: relay.url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+}
+
 /** Resolve a video → same-origin playable payload (dash/hls/youtube/mp4). */
 async function resolveVideoPayload(
   childId: string,
@@ -410,73 +573,26 @@ async function resolveVideoPayload(
   vUrlParam = "",
   realVideoId = "",
 ) {
+  const sigOpts = { batchId, videoId: realVideoId || childId, subjectId };
+  const direct = vUrlParam.trim();
+
+  // FAST PATH: the lecture list already carries the CloudFront manifest url
+  // (v2 merge). Skip the slow upstream video-url roundtrip entirely and sign
+  // from local/env sources; only when no signature is available do we fall
+  // through to the full chain below.
+  if (direct && /\.cloudfront\.net/i.test(direct)) {
+    const fast = await payloadFromRawUrl(direct, "", sigOpts);
+    if (fast) return fast;
+  }
+
   let vid = await lxVideoUrl(batchId, subjectId, childId).catch(() => null);
   if (!vid && realVideoId && realVideoId !== childId) {
     vid = await lxVideoUrl(batchId, subjectId, realVideoId).catch(() => null);
   }
-  const sigOpts = { batchId, videoId: realVideoId || childId, subjectId };
-  const rawUrl = vid?.url?.trim() || vUrlParam.trim();
+  const rawUrl = vid?.url?.trim() || direct;
   if (rawUrl) {
-    const url = rawUrl;
-    if (/\.mpd(\?|$)/i.test(url)) {
-      const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: vid?.signedUrl || "" });
-      if (!relay) return null;
-      let clearKeys: Record<string, string> | null = null;
-      try {
-        // Probe the manifest through the same upstream lane chain the relay
-        // uses (delta → pearl → direct) to extract the ClearKey KID.
-        const u = new URL(url);
-        const mpdRes = await fetchSignedAsset(
-          u.host,
-          u.pathname.replace(/^\/+/, ""),
-          relay.signedQuery,
-          { timeoutMs: 30000 },
-        );
-        if (mpdRes.ok) {
-          const text = await mpdRes.text();
-          const kidMatch = text.match(/default_KID="([0-9a-fA-F-]+)"/);
-          if (kidMatch) {
-            clearKeys = await lxOtp(kidMatch[1]);
-          }
-        }
-      } catch {
-        /* keys unavailable — player will surface a decrypt error */
-      }
-      return {
-        kind: "dash",
-        url: relay.url,
-        signedUrl: "",
-        clearKeys,
-        poster: "",
-        drmDetails: null,
-      };
-    }
-    if (/\.m3u8(\?|$)/i.test(url)) {
-      const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: vid?.signedUrl || "" });
-      if (!relay) return null;
-      return {
-        kind: "hls",
-        url: relay.url,
-        signedUrl: "",
-        clearKeys: null,
-        poster: "",
-        drmDetails: null,
-      };
-    }
-    if (/youtube\.com|youtu\.be/i.test(url)) {
-      return { kind: "youtube", url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
-    }
-    // plain file (mp4 etc.) inside the signed folder
-    const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: vid?.signedUrl || "" });
-    if (!relay) return null;
-    return {
-      kind: "mp4",
-      url: relay.url,
-      signedUrl: "",
-      clearKeys: null,
-      poster: "",
-      drmDetails: null,
-    };
+    const payload = await payloadFromRawUrl(rawUrl, vid?.signedUrl || "", sigOpts);
+    if (payload) return payload;
   }
 
   // No signed stream — maybe a youtube lecture.
@@ -488,6 +604,43 @@ async function resolveVideoPayload(
     }
   }
   return null;
+}
+
+/**
+ * Memoized entry point for the parcham_vid action.
+ *  - full payload .............. 10 min
+ *  - dash without clearKeys ..... 45s (probe failed — retry soon)
+ *  - unavailable (null) ......... 30s negative cache (no upstream hammering)
+ * Concurrent identical requests share one in-flight resolution.
+ */
+const videoMemo = new Map<string, MemoEntry>();
+const videoInflight = new Map<string, Promise<VideoPayload | null>>();
+
+async function resolveVideoPayloadCached(
+  childId: string,
+  batchId: string,
+  subjectId: string,
+  vUrlParam = "",
+  realVideoId = "",
+): Promise<VideoPayload | null> {
+  const key = `${batchId}|${subjectId}|${childId}|${realVideoId}|${(vUrlParam || "").split("?")[0]}`;
+  const hit = memoGet(videoMemo, key);
+  if (hit) return hit.value as VideoPayload | null;
+  const running = videoInflight.get(key);
+  if (running) return running;
+  const p = (async () => {
+    try {
+      const value = await resolveVideoPayload(childId, batchId, subjectId, vUrlParam, realVideoId);
+      const hasKeys = value?.kind === "dash" ? !!value.clearKeys : true;
+      const ttl = !value ? 30_000 : hasKeys ? 10 * 60_000 : 45_000;
+      memoSet(videoMemo, key, value, ttl);
+      return value;
+    } finally {
+      videoInflight.delete(key);
+    }
+  })();
+  videoInflight.set(key, p);
+  return p;
 }
 
 // ---------------------------------------------------------------------------
@@ -806,7 +959,7 @@ export async function POST(request: NextRequest) {
           return NextResponse.json({ success: false }, { headers: CORS_HEADERS });
         }
         try {
-          const data = await resolveVideoPayload(childId, batchId, subjectId, vUrl, realVideoId);
+          const data = await resolveVideoPayloadCached(childId, batchId, subjectId, vUrl, realVideoId);
           if (!data) {
             return NextResponse.json(
               {
