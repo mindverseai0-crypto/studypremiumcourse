@@ -402,3 +402,15 @@ Stage Summary:
 - Relay now speaks the nested hls/<quality>/main.m3u8 layout + penpencil-key remap — any FUTURE owner signature for an HLS folder plays with zero further code changes (paste it into the player's recovery box or POST /api/pw-register)
 - Expiry discipline: new sig dies 1789896759 (~4h after integration); dd3326fa already expired — expired entries are auto-ignored by getFallbackSignedQuery/lookupStoredSignature
 - proxy.studyparcham.in confirmed a pure pass-through (no server-side signing); it adds NO capability over our direct+delta lanes, kept as pearl fallback lane
+---
+Task ID: restore-local-state-5
+Agent: Z.ai Code (main)
+Task: Rebuild src/lib/local-state.ts after the FIFTH sandbox snapshot revert (same import error at studybison-app.tsx:24, GET / → 500)
+
+Work Log:
+- Revert took ONLY local-state.ts this time: pw-cdn 3a0ec8d2 fallback entry, /api/pw relay fixes (resolveUriToFolderRoot/penpencilKeyUri), signature-store subPath fallback, db/pw-signatures.json (both folders) and sr-* files all verified present
+- Rewrote the module byte-for-byte from the hardened spec (raw-string parse + memoized snapshots, EMPTY_LIST SSR snapshot, sb-*-changed + storage fan-out, idempotent writes, self-contained WAAPI XP toast)
+- GET / → 200 (35ms); browser smoke: 81 batch elements, XP chip, no error box, zero page errors; lint clean
+
+Stage Summary:
+- Fifth restore; every revert so far costs only this one file paste — the module content is fully specified in this worklog (restore-local-state-3/4/5) for any future one-step recovery
