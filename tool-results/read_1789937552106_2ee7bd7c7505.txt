@@ -1,0 +1,595 @@
+   840→    } else {
+   841→      setHoverFrac(f);
+   842→    }
+   843→  };
+   844→  const onScrubEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+   845→    scrubbing.current = false;
+   846→    e.currentTarget.classList.remove('scrubbing');
+   847→    setScrubFrac(null);
+   848→  };
+   849→
+   850→  const displayFrac = duration > 0 ? (scrubFrac ?? currentTime / duration) : 0;
+   851→  const tipFrac = scrubFrac ?? hoverFrac;
+   852→  const isPwStream = kind === 'dash' || kind === 'hls';
+   853→  const ytId = kind === 'youtube' ? youtubeId(src) : '';
+   854→  const panelsEnabled = !isSrEmbed && kind !== 'youtube';
+   855→
+   856→  const qualityOptions: Array<{ key: 'auto' | number; label: string }> = useMemo(() => {
+   857→    if (kind === 'hls') return [{ key: 'auto', label: 'Auto' }, ...hlsLevels.map((l) => ({ key: l.index as 'auto' | number, label: l.label }))];
+   858→    if (kind === 'dash') return [{ key: 'auto', label: 'Auto' }, ...dashList.map((d) => ({ key: d.id as 'auto' | number, label: `${d.height}p` }))];
+   859→    return [{ key: 'auto', label: 'Auto' }];
+   860→  }, [kind, hlsLevels, dashList]);
+   861→
+   862→  const selectQuality = useCallback((sel: 'auto' | number) => {
+   863→    if (kind === 'hls') selectHlsQuality(sel);
+   864→    else if (kind === 'dash') selectDashQuality(sel);
+   865→    setSettingsSheet('quality');
+   866→  }, [kind, selectHlsQuality, selectDashQuality]);
+   867→
+   868→  if (isSrEmbed) {
+   869→    return (
+   870→      <div className="sb-player-root">
+   871→        <div className="video-wrapper">
+   872→          <iframe
+   873→            src={srUrl}
+   874→            title={title}
+   875→            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+   876→            allowFullScreen
+   877→            style={{ width: '100%', height: '100%', border: 0, background: '#000' }}
+   878→          />
+   879→          <div className="controls-overlay">
+   880→            <div className="top-bar">
+   881→              <div className="top-left">
+   882→                <i className="fas fa-arrow-left back-btn" onClick={goBack}></i>
+   883→                <div className="video-title">
+   884→                  {title}
+   885→                  <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.5px', padding: '2px 6px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle' }}>STUDY RATNA</span>
+   886→                </div>
+   887→              </div>
+   888→              <div className="top-icons">
+   889→                <i className="fas fa-expand icon-btn" onClick={toggleFullscreen}></i>
+   890→              </div>
+   891→            </div>
+   892→          </div>
+   893→        </div>
+   894→      </div>
+   895→    );
+   896→  }
+   897→
+   898→  return (
+   899→    <div className="sb-player-root" ref={wrapperRef}
+   900→      onMouseMove={scheduleHide}
+   901→      onClick={scheduleHide}
+   902→    >
+   903→      <h1 className="sr-only-player">{title}</h1>
+   904→      <div className="video-wrapper">
+   905→        {kind === 'youtube' && ytId ? (
+   906→          <iframe
+   907→            src={`https://www.youtube.com/embed/${encodeURIComponent(ytId)}?autoplay=1&rel=0`}
+   908→            title={title}
+   909→            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+   910→            allowFullScreen
+   911→            style={{ width: '100%', height: '100%', border: 0 }}
+   912→          />
+   913→        ) : (
+   914→          // Preview-panel/extension scripts can tag <video> (e.g. class
+   915→          // "vq-video-detected") before React hydrates — suppress the
+   916→          // harmless attribute mismatch this causes.
+   917→          <video
+   918→            suppressHydrationWarning
+   919→            ref={videoRef}
+   920→            playsInline
+   921→            loop={loop}
+   922→            poster={poster || undefined}
+   923→            onPlay={() => { setPlaying(true); scheduleHide(); }}
+   924→            onPause={() => { setPlaying(false); setCenterVisible(true); setControlsHidden(false); }}
+   925→            onLoadedMetadata={(e) => {
+   926→              setDuration(e.currentTarget.duration || 0);
+   927→              e.currentTarget.playbackRate = SPEEDS[speedIdx];
+   928→              e.currentTarget.volume = volume / 100;
+   929→            }}
+   930→            onTimeUpdate={(e) => {
+   931→              const v = e.currentTarget;
+   932→              setCurrentTime(v.currentTime);
+   933→              try {
+   934→                if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1));
+   935→              } catch { /* ignore */ }
+   936→              // Award XP once when 90% watched
+   937→              if (!xpGiven.current && v.duration > 0 && v.currentTime / v.duration >= 0.9) {
+   938→                xpGiven.current = true;
+   939→                addXP(10, 'Watched Video');
+   940→              }
+   941→            }}
+   942→            onProgress={(e) => {
+   943→              const v = e.currentTarget;
+   944→              try {
+   945→                if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1));
+   946→              } catch { /* ignore */ }
+   947→            }}
+   948→            onEnded={() => {
+   949→              setPlaying(false);
+   950→              if (!xpGiven.current) {
+   951→                xpGiven.current = true;
+   952→                addXP(10, 'Watched Video');
+   953→              }
+   954→            }}
+   955→            onCanPlay={() => { setLoading(false); }}
+   956→            onError={() => {
+   957→              if (src) {
+   958→                setError('Unable to load the stream. Please try again.');
+   959→                setLoading(false);
+   960→              }
+   961→            }}
+   962→          />
+   963→        )}
+   964→
+   965→        {error ? (
+   966→          <div className="error-box">
+   967→            <i className="fas fa-video-slash" style={{ fontSize: '2rem', marginBottom: '10px' }}></i>
+   968→            <br />
+   969→            <span>{error}</span>
+   970→            <div className="sig-recovery">
+   971→              <div className="sig-recovery-title">
+   972→                <i className="fas fa-key"></i> Have a signed lecture URL?
+   973→              </div>
+   974→              <p className="sig-recovery-hint">
+   975→                Paste the FULL signed URL (…/master.mpd?Signature=…&amp;Key-Pair-Id=…&amp;Policy=…) to unlock
+   976→                this stream. It is registered server-side and kept for future plays.
+   977→              </p>
+   978→              <input
+   979→                className="sig-recovery-input"
+   980→                type="url"
+   981→                value={sigInput}
+   982→                placeholder="https://…/master.mpd?Signature=…"
+   983→                onChange={(e) => setSigInput(e.target.value)}
+   984→                onKeyDown={(e) => {
+   985→                  if (e.key === 'Enter') void submitSignature();
+   986→                }}
+   987→              />
+   988→              <button
+   989→                className="sig-recovery-btn"
+   990→                type="button"
+   991→                onClick={() => void submitSignature()}
+   992→                disabled={sigBusy || !sigInput.trim()}
+   993→              >
+   994→                {sigBusy ? (
+   995→                  <>
+   996→                    <i className="fas fa-spinner fa-spin"></i> Verifying…
+   997→                  </>
+   998→                ) : (
+   999→                  <>
+  1000→                    <i className="fas fa-play"></i> Load Stream
+  1001→                  </>
+  1002→                )}
+  1003→              </button>
+  1004→              {sigMsg ? <div className="sig-recovery-msg">{sigMsg}</div> : null}
+  1005→            </div>
+  1006→          </div>
+  1007→        ) : null}
+  1008→
+  1009→        {loading && !error && kind !== 'youtube' ? (
+  1010→          <div className="loader-overlay">
+  1011→            <div className="spinner-ring"></div>
+  1012→            <div className="status-text">{status}</div>
+  1013→            <div className="status-text" style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '8px' }}>{statusSub}</div>
+  1014→          </div>
+  1015→        ) : null}
+  1016→
+  1017→        {/* ---------------- side panel / bottom sheet ---------------- */}
+  1018→        {panel && panelsEnabled ? (
+  1019→          <aside className="sb-panel" onClick={(e) => e.stopPropagation()}>
+  1020→            {viewingDoc ? (
+  1021→              <div className="pdf-view">
+  1022→                <div className="pdf-view-head">
+  1023→                  <button className="panel-close" style={{ marginLeft: 0 }} aria-label="Back to list" onClick={() => setViewingDoc(null)}>
+  1024→                    <i className="fas fa-chevron-left"></i>
+  1025→                  </button>
+  1026→                  <div className="pdf-view-name">{viewingDoc.name}</div>
+  1027→                  <a className="doc-btn" href={viewingDoc.url} target="_blank" rel="noreferrer">
+  1028→                    <i className="fas fa-external-link-alt" style={{ fontSize: '0.65rem' }}></i> Open
+  1029→                  </a>
+  1030→                </div>
+  1031→                <iframe className="pdf-frame" src={viewingDoc.url} title={viewingDoc.name} />
+  1032→              </div>
+  1033→            ) : (
+  1034→              <>
+  1035→                <div className="panel-head">
+  1036→                  <button className={`panel-tab ${panel === 'comments' ? 'active' : ''}`} onClick={() => openPanel('comments')}>Comments</button>
+  1037→                  <button className={`panel-tab ${panel === 'notes' ? 'active' : ''}`} onClick={() => openPanel('notes')}>
+  1038→                    Notes{extras.notes.length > 0 ? <span className="tab-count">{extras.notes.length}</span> : null}
+  1039→                  </button>
+  1040→                  <button className={`panel-tab ${panel === 'attachments' ? 'active' : ''}`} onClick={() => openPanel('attachments')}>
+  1041→                    Attach{attachmentDocs.length > 0 ? <span className="tab-count">{attachmentDocs.length}</span> : null}
+  1042→                  </button>
+  1043→                  <button className="panel-close" aria-label="Close panel" onClick={closePanel}>
+  1044→                    <i className="fas fa-times"></i>
+  1045→                  </button>
+  1046→                </div>
+  1047→
+  1048→                {panel === 'comments' ? (
+  1049→                  <div className="panel-body">
+  1050→                    <div className="panel-list" ref={listRef}>
+  1051→                      {listLoading || seeding ? (
+  1052→                        <div className="panel-loading"><i className="fas fa-spinner fa-spin"></i> Loading…</div>
+  1053→                      ) : items.length === 0 ? (
+  1054→                        <div className="panel-empty">
+  1055→                          <i className="far fa-comment-dots"></i>
+  1056→                          <div className="pe-title">No comments yet</div>
+  1057→                          <div className="pe-sub">Be the first to share your thoughts on this lecture.</div>
+  1058→                        </div>
+  1059→                      ) : (
+  1060→                        <>
+  1061→                          {items.map((it) => (
+  1062→                            <div key={it.id}>
+  1063→                              <div className="cm">
+  1064→                                <AuthorAvatar name={it.author || 'Student'} />
+  1065→                                <div className="cm-main">
+  1066→                                  <div className="cm-top">
+  1067→                                    <span className="cm-name">{it.author || 'Student'}</span>
+  1068→                                    <span className="cm-time">{timeAgo(it.createdAt)}</span>
+  1069→                                  </div>
+  1070→                                  <div className="cm-text">{it.text}</div>
+  1071→                                  <div className="cm-actions">
+  1072→                                    <button className="cm-act" onClick={() => { setReplyTo({ id: it.id, author: it.author || 'Student' }); }}>Reply</button>
+  1073→                                  </div>
+  1074→                                </div>
+  1075→                              </div>
+  1076→                              {it.replies.length > 0 ? (
+  1077→                                <div className="cm-replies">
+  1078→                                  {it.replies.map((r) => (
+  1079→                                    <div className="cm" key={r.id}>
+  1080→                                      <AuthorAvatar name={r.author || 'Student'} small />
+  1081→                                      <div className="cm-main">
+  1082→                                        <div className="cm-top">
+  1083→                                          <span className="cm-name">{r.author || 'Student'}</span>
+  1084→                                          <span className="cm-time">{timeAgo(r.createdAt)}</span>
+  1085→                                        </div>
+  1086→                                        <div className="cm-text">{r.text}</div>
+  1087→                                      </div>
+  1088→                                    </div>
+  1089→                                  ))}
+  1090→                                </div>
+  1091→                              ) : null}
+  1092→                            </div>
+  1093→                          ))}
+  1094→                          {botTyping ? (
+  1095→                            <div className="cm typing-row" aria-live="polite">
+  1096→                              <AuthorAvatar name={botTyping} />
+  1097→                              <div className="cm-main">
+  1098→                                <div className="cm-top">
+  1099→                                  <span className="cm-name">{botTyping}</span>
+  1100→                                </div>
+  1101→                                <div className="cm-text typing"><span className="tdot"></span><span className="tdot"></span><span className="tdot"></span></div>
+  1102→                              </div>
+  1103→                            </div>
+  1104→                          ) : null}
+  1105→                          {!botTyping ? <div className="list-end">You&apos;re all caught up</div> : null}
+  1106→                        </>
+  1107→                      )}
+  1108→                    </div>
+  1109→                    <div className="composer-wrap">
+  1110→                      {replyTo ? (
+  1111→                        <div className="reply-chip">
+  1112→                          <span>Replying to <b>@{replyTo.author}</b></span>
+  1113→                          <span className="reply-x" onClick={() => setReplyTo(null)} role="button" aria-label="Cancel reply">✕</span>
+  1114→                        </div>
+  1115→                      ) : null}
+  1116→                      <div className="name-row">
+  1117→                        {nameEditing ? (
+  1118→                          <>
+  1119→                            <input
+  1120→                              className="name-edit-input"
+  1121→                              value={nameDraft}
+  1122→                              placeholder="Your name"
+  1123→                              maxLength={40}
+  1124→                              autoFocus
+  1125→                              onChange={(e) => setNameDraft(e.target.value)}
+  1126→                              onKeyDown={(e) => { if (e.key === 'Enter') saveName(); }}
+  1127→                            />
+  1128→                            <button className="name-edit-btn" onClick={saveName}>Save</button>
+  1129→                          </>
+  1130→                        ) : (
+  1131→                          <>
+  1132→                            <span>Commenting as <b style={{ color: '#9ca3af' }}>{displayName || 'Student'}</b></span>
+  1133→                            <button className="name-edit-btn" onClick={() => { setNameDraft(displayName); setNameEditing(true); }}>Edit</button>
+  1134→                          </>
+  1135→                        )}
+  1136→                      </div>
+  1137→                      {submitErr ? (
+  1138→                        <div className="name-row" style={{ color: '#f87171' }}>{submitErr}</div>
+  1139→                      ) : null}
+  1140→                      <div className="composer">
+  1141→                        <input
+  1142→                          value={draft}
+  1143→                          placeholder="Add a comment…"
+  1144→                          maxLength={2000}
+  1145→                          onChange={(e) => setDraft(e.target.value)}
+  1146→                          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submitPost(); } }}
+  1147→                        />
+  1148→                        <button className="send-btn" aria-label="Send" disabled={!draft.trim() || posting} onClick={() => void submitPost()}>
+  1149→                          <i className={`fas ${posting ? 'fa-spinner fa-spin' : 'fa-paper-plane'}`}></i>
+  1150→                        </button>
+  1151→                      </div>
+  1152→                    </div>
+  1153→                  </div>
+  1154→                ) : (
+  1155→                  <div className="panel-body">
+  1156→                    {extrasLoading ? (
+  1157→                      <div className="panel-loading"><i className="fas fa-spinner fa-spin"></i> Loading…</div>
+  1158→                    ) : (
+  1159→                      <>
+  1160→                        {panel === 'notes' && extras.notes.length === 0 ? (
+  1161→                          <div className="panel-empty">
+  1162→                            <i className="far fa-file-pdf"></i>
+  1163→                            <div className="pe-title">No notes</div>
+  1164→                            <div className="pe-sub">Class notes for this lecture will appear here.</div>
+  1165→                          </div>
+  1166→                        ) : null}
+  1167→                        {panel === 'attachments' && attachmentDocs.length === 0 ? (
+  1168→                          <div className="panel-empty">
+  1169→                            <i className="fas fa-paperclip"></i>
+  1170→                            <div className="pe-title">No attachments</div>
+  1171→                            <div className="pe-sub">Notes, DPPs and other resources for this lecture will appear here.</div>
+  1172→                          </div>
+  1173→                        ) : null}
+  1174→                        {(panel === 'notes' ? extras.notes : attachmentDocs).length > 0 ? (
+  1175→                          <div className="panel-list">
+  1176→                            {(panel === 'notes' ? extras.notes : attachmentDocs).map((d) => (
+  1177→                              <div className="doc-item" key={d.url}>
+  1178→                                <i className="far fa-file-pdf doc-icon"></i>
+  1179→                                <div className="doc-name">
+  1180→                                  {d.name || 'Document'}
+  1181→                                  {'tag' in d && d.tag ? <span className="doc-tag">{d.tag}</span> : null}
+  1182→                                </div>
+  1183→                                <button className="doc-btn primary" onClick={() => setViewingDoc(d)}>View</button>
+  1184→                                <a className="doc-btn" href={d.url} target="_blank" rel="noreferrer">Open</a>
+  1185→                              </div>
+  1186→                            ))}
+  1187→                          </div>
+  1188→                        ) : null}
+  1189→                      </>
+  1190→                    )}
+  1191→                  </div>
+  1192→                )}
+  1193→              </>
+  1194→            )}
+  1195→          </aside>
+  1196→        ) : null}
+  1197→
+  1198→        {/* -------- restore affordance: bring the player controls and
+  1199→             the options (comments, notes, attachments…) back after
+  1200→             they auto-hide during playback -------- */}
+  1201→        {controlsHidden && !error && !isSrEmbed ? (
+  1202→          <button
+  1203→            className="controls-restore"
+  1204→            aria-label="Show player controls and options"
+  1205→            title="Show controls"
+  1206→            onClick={(e) => { e.stopPropagation(); showControls(); }}
+  1207→          >
+  1208→            <i className="fas fa-sliders"></i>
+  1209→          </button>
+  1210→        ) : null}
+  1211→
+  1212→        <div className={`controls-overlay ${controlsHidden ? 'hidden' : ''}`}>
+  1213→          <div className="top-bar">
+  1214→            <div className="top-left">
+  1215→              <i className="fas fa-arrow-left back-btn" onClick={goBack} role="button" aria-label="Back"></i>
+  1216→            </div>
+  1217→            <div className="top-icons">
+  1218→              <i className="fas fa-ellipsis-v icon-btn" onClick={(e) => { e.stopPropagation(); setMenuOpen(true); }} role="button" aria-label="More options"></i>
+  1219→            </div>
+  1220→          </div>
+  1221→
+  1222→          {kind !== 'youtube' ? (
+  1223→            <>
+  1224→              <div className="center-area" onClick={togglePlay}>
+  1225→                {centerVisible ? (
+  1226→                  <div className={`play-pause-center ${playing ? '' : 'paused'}`}>
+  1227→                    <i className={`fas ${playing ? 'fa-pause' : 'fa-play'}`}></i>
+  1228→                  </div>
+  1229→                ) : null}
+  1230→              </div>
+  1231→
+  1232→              {seekFlash ? <div className="seek-flash">{seekFlash}</div> : null}
+  1233→
+  1234→              <div className="bottom-gradient">
+  1235→                <div className="time-row">
+  1236→                  <span>{formatTime(currentTime)}</span>
+  1237→                  <button className="speed-chip" onClick={(e) => { e.stopPropagation(); setSettingsSheet('speed'); }}>
+  1238→                    {SPEEDS[speedIdx]}x
+  1239→                  </button>
+  1240→                  <span className="time-dur">{formatTime(duration)}</span>
+  1241→                </div>
+  1242→
+  1243→                <div
+  1244→                  className="progress-wrapper"
+  1245→                  onPointerDown={onScrubStart}
+  1246→                  onPointerMove={onScrubMove}
+  1247→                  onPointerUp={onScrubEnd}
+  1248→                  onPointerCancel={onScrubEnd}
+  1249→                  onPointerLeave={() => { if (!scrubbing.current) setHoverFrac(null); }}
+  1250→                  role="slider"
+  1251→                  aria-label="Seek"
+  1252→                  aria-valuemin={0}
+  1253→                  aria-valuemax={Math.round(duration)}
+  1254→                  aria-valuenow={Math.round(currentTime)}
+  1255→                >
+  1256→                  <div className="progress-track">
+  1257→                    <div className="progress-buffered" style={{ width: duration ? `${Math.min(100, (buffered / duration) * 100)}%` : '0%' }}></div>
+  1258→                    <div className="progress-fill" style={{ width: `${displayFrac * 100}%` }}></div>
+  1259→                  </div>
+  1260→                  <div className="progress-thumb" style={{ left: `${displayFrac * 100}%` }}></div>
+  1261→                  {tipFrac !== null && duration > 0 ? (
+  1262→                    <div className="progress-tip" style={{ left: `${tipFrac * 100}%` }}>{formatTime(tipFrac * duration)}</div>
+  1263→                  ) : null}
+  1264→                </div>
+  1265→
+  1266→                <div className="controls-row">
+  1267→                  <div className="controls-left">
+  1268→                    <button className="c-btn play-btn" aria-label={playing ? 'Pause' : 'Play'} onClick={togglePlay}>
+  1269→                      <i className={`fas ${playing ? 'fa-pause' : 'fa-play'}`}></i>
+  1270→                    </button>
+  1271→                    <button className="c-btn skip-btn" aria-label="Back 10 seconds" onClick={() => seek(-10)}>
+  1272→                      <i className="fas fa-rotate-left"></i>
+  1273→                      <span className="skip-text">10</span>
+  1274→                    </button>
+  1275→                    <button className="c-btn skip-btn" aria-label="Forward 10 seconds" onClick={() => seek(10)}>
+  1276→                      <i className="fas fa-rotate-right"></i>
+  1277→                      <span className="skip-text">10</span>
+  1278→                    </button>
+  1279→                    <div className="vol-wrap">
+  1280→                      <button className="c-btn vol-btn" aria-label={muted ? 'Unmute' : 'Mute'} onClick={toggleMute}>
+  1281→                        <i className={`fas ${muted || volume === 0 ? 'fa-volume-mute' : volume < 50 ? 'fa-volume-down' : 'fa-volume-up'}`}></i>
+  1282→                      </button>
+  1283→                      <div className="vol-pop" onClick={(e) => e.stopPropagation()}>
+  1284→                        <input
+  1285→                          className="vol-range"
+  1286→                          type="range"
+  1287→                          min={0}
+  1288→                          max={100}
+  1289→                          value={volume}
+  1290→                          aria-label="Volume"
+  1291→                          onChange={(e) => changeVolume(Number(e.target.value))}
+  1292→                        />
+  1293→                      </div>
+  1294→                    </div>
+  1295→                  </div>
+  1296→                  <div className="controls-right">
+  1297→                    {panelsEnabled ? (
+  1298→                      <>
+  1299→                        <button className="c-btn panel-btn" aria-label="Comments" title="Comments" onClick={(e) => { e.stopPropagation(); openPanel('comments'); }}>
+  1300→                          <i className="far fa-comment-dots"></i>
+  1301→                        </button>
+  1302→                        <button className="c-btn panel-btn" aria-label="Notes" title="Notes" onClick={(e) => { e.stopPropagation(); openPanel('notes'); }}>
+  1303→                          <i className="far fa-edit"></i>
+  1304→                        </button>
+  1305→                      </>
+  1306→                    ) : null}
+  1307→                    <button className="c-btn gear-btn" aria-label="Settings" onClick={(e) => { e.stopPropagation(); setSettingsSheet('root'); }}>
+  1308→                      <i className="fas fa-cog"></i>
+  1309→                    </button>
+  1310→                    <button className="c-btn fullscreen-btn" aria-label={isFs ? 'Exit fullscreen' : 'Fullscreen'} onClick={toggleFullscreen}>
+  1311→                      <i className={`fas ${isFs ? 'fa-compress' : 'fa-expand'}`}></i>
+  1312→                    </button>
+  1313→                  </div>
+  1314→                </div>
+  1315→              </div>
+  1316→            </>
+  1317→          ) : null}
+  1318→
+  1319→        </div>
+  1320→
+  1321→        {/* -------- settings sheet (gear / speed chip) — outside the
+  1322→             controls overlay so it stacks above the error box -------- */}
+  1323→          <div
+  1324→            className={`sheet-overlay ${settingsSheet ? 'active' : ''}`}
+  1325→            onClick={(e) => { e.stopPropagation(); setSettingsSheet(''); }}
+  1326→          >
+  1327→            <div className="sb-sheet" onClick={(e) => e.stopPropagation()}>
+  1328→              <div className="sheet-handle-wrap"><div className="sheet-handle"></div></div>
+  1329→
+  1330→              {settingsSheet === 'root' ? (
+  1331→                <>
+  1332→                  <div className="sheet-title"><i className="fas fa-cog" style={{ color: '#9ca3af' }}></i> Playback settings</div>
+  1333→                  <div className="sheet-row" onClick={() => setSettingsSheet('speed')}>
+  1334→                    <span className="row-icon"><i className="fas fa-gauge-high"></i></span>
+  1335→                    <span>Playback speed</span>
+  1336→                    <span className="row-val">{SPEEDS[speedIdx]}x <i className="fas fa-chevron-right" style={{ fontSize: '0.65rem' }}></i></span>
+  1337→                  </div>
+  1338→                  <div className={`sheet-row ${isPwStream ? '' : 'disabled'}`} onClick={() => { if (isPwStream) setSettingsSheet('quality'); }}>
+  1339→                    <span className="row-icon"><i className="fas fa-sliders"></i></span>
+  1340→                    <span>Quality</span>
+  1341→                    <span className="row-val">
+  1342→                      {qualityOptions.find((q) => q.key === qualitySel)?.label || 'Auto'}
+  1343→                      <i className="fas fa-chevron-right" style={{ fontSize: '0.65rem' }}></i>
+  1344→                    </span>
+  1345→                  </div>
+  1346→                  <div className="sheet-row" onClick={() => setLoop((l) => !l)}>
+  1347→                    <span className="row-icon"><i className="fas fa-repeat"></i></span>
+  1348→                    <span>Loop</span>
+  1349→                    {loop ? <span className="row-check"><i className="fas fa-check"></i></span> : <span className="row-val">Off</span>}
+  1350→                  </div>
+  1351→                </>
+  1352→              ) : null}
+  1353→
+  1354→              {settingsSheet === 'speed' ? (
+  1355→                <>
+  1356→                  <div className="sheet-title">
+  1357→                    <span className="sheet-back" onClick={() => setSettingsSheet('root')} role="button" aria-label="Back"><i className="fas fa-arrow-left"></i></span>
+  1358→                    Playback speed
+  1359→                  </div>
+  1360→                  {SPEEDS.map((s, i) => (
+  1361→                    <div key={s} className={`sheet-row ${i === speedIdx ? 'checked' : ''}`} onClick={() => { selectSpeed(i); setSettingsSheet(''); }}>
+  1362→                      <span className="row-icon"><i className="fas fa-gauge-high"></i></span>
+  1363→                      <span>{s}x</span>
+  1364→                      {i === speedIdx ? <span className="row-check"><i className="fas fa-check"></i></span> : null}
+  1365→                    </div>
+  1366→                  ))}
+  1367→                </>
+  1368→              ) : null}
+  1369→
+  1370→              {settingsSheet === 'quality' ? (
+  1371→                <>
+  1372→                  <div className="sheet-title">
+  1373→                    <span className="sheet-back" onClick={() => setSettingsSheet('root')} role="button" aria-label="Back"><i className="fas fa-arrow-left"></i></span>
+  1374→                    Quality
+  1375→                  </div>
+  1376→                  {qualityOptions.map((q) => (
+  1377→                    <div key={String(q.key)} className={`sheet-row ${q.key === qualitySel ? 'checked' : ''}`} onClick={() => { selectQuality(q.key); setSettingsSheet(''); }}>
+  1378→                      <span className="row-icon"><i className="fas fa-sliders"></i></span>
+  1379→                      <span>{q.label}</span>
+  1380→                      {q.key === qualitySel ? <span className="row-check"><i className="fas fa-check"></i></span> : null}
+  1381→                    </div>
+  1382→                  ))}
+  1383→                </>
+  1384→              ) : null}
+  1385→            </div>
+  1386→          </div>
+  1387→
+  1388→          {/* -------- kebab sheet (⋮) -------- */}
+  1389→          <div
+  1390→            className={`sheet-overlay ${menuOpen ? 'active' : ''}`}
+  1391→            onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }}
+  1392→          >
+  1393→            <div className="sb-sheet" onClick={(e) => e.stopPropagation()}>
+  1394→              <div className="sheet-handle-wrap"><div className="sheet-handle"></div></div>
+  1395→              <div className="sheet-title"><i className="fas fa-ellipsis-v" style={{ color: '#9ca3af' }}></i> More options</div>
+  1396→              <div className="sheet-sep"></div>
+  1397→              {pipAvailable ? (
+  1398→                <div className="sheet-row" onClick={togglePip}>
+  1399→                  <span className="row-icon"><i className="fas fa-clone"></i></span>
+  1400→                  <span>Picture-in-picture</span>
+  1401→                </div>
+  1402→              ) : null}
+  1403→              <div className="sheet-row" onClick={() => { copyLink(); setMenuOpen(false); }}>
+  1404→                <span className="row-icon"><i className="fas fa-link"></i></span>
+  1405→                <span>{copied ? 'Link Copied!' : 'Copy Link'}</span>
+  1406→              </div>
+  1407→              <div className="sheet-row" style={{ cursor: 'default' }}>
+  1408→                <span className="row-icon"><i className="fas fa-film"></i></span>
+  1409→                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+  1410→              </div>
+  1411→            </div>
+  1412→          </div>
+  1413→      </div>
+  1414→    </div>
+  1415→  );
+  1416→}
+  1417→
+  1418→export default function PlayerPage() {
+  1419→  return (
+  1420→    <Suspense fallback={
+  1421→      <div className="sb-player-root">
+  1422→        <div className="video-wrapper">
+  1423→          <div className="loader-overlay">
+  1424→            <div className="spinner-ring"></div>
+  1425→            <div className="status-text">Loading Player...</div>
+  1426→          </div>
+  1427→        </div>
+  1428→      </div>
+  1429→    }>
+  1430→      <PlayerInner />
+  1431→    </Suspense>
+  1432→  );
+  1433→}
+  1434→

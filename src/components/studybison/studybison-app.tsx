@@ -22,8 +22,18 @@ import {
   TestItemPublic,
 } from '@/lib/api-client';
 import { addXP, useEnrolledBatches, useXP, useWatchedVideos } from '@/lib/local-state';
+import {
+  SbDownload,
+  listDownloads,
+  subscribeDownloads,
+  deleteDownload,
+  pauseDownload,
+  startDownload,
+  estimateOfflineStorage,
+  formatBytes,
+} from '@/lib/offline';
 
-type ViewId = 'home-view' | 'study-view' | 'all-classes-view' | 'chapters-view' | 'content-view' | 'all-tests-view';
+export type ViewId = 'home-view' | 'study-view' | 'all-classes-view' | 'chapters-view' | 'content-view' | 'all-tests-view' | 'downloads-view';
 
 interface SubjectRef { id: string; internalId: string; name: string; masterId: string; batchSubjectId: string }
 interface TopicRef { id: string; name: string }
@@ -81,6 +91,10 @@ export default function StudyBisonApp() {
   const [tests, setTests] = useState<TestItemPublic[]>([]);
   const [testsLoading, setTestsLoading] = useState(false);
 
+  // ---------------- PWA offline downloads ----------------
+  const [downloads, setDownloads] = useState<SbDownload[]>([]);
+  const [storageEst, setStorageEst] = useState<{ usage: number; quota: number } | null>(null);
+
   // ---------------- resources tab ----------------
   const [resourcesTab, setResourcesTab] = useState<'subjects' | 'resources'>('subjects');
   const [resourceTopics, setResourceTopics] = useState<ChapterItemPublic[]>([]);
@@ -109,6 +123,49 @@ export default function StudyBisonApp() {
     setView(v);
     setSidebarOpen(false);
     window.scrollTo(0, 0);
+  }, []);
+
+  // ==================================================================
+  // OFFLINE LECTURE LIBRARY (PWA downloads)
+  // ==================================================================
+  const refreshDownloads = useCallback(() => {
+    void listDownloads().then((list) => {
+      setDownloads(list);
+      void estimateOfflineStorage().then(setStorageEst);
+    });
+  }, []);
+
+  useEffect(() => {
+    refreshDownloads();
+    const unsub = subscribeDownloads(refreshDownloads);
+    return () => unsub();
+  }, [refreshDownloads]);
+
+  // manifest shortcut / deep link → open the Downloads view directly
+  useEffect(() => {
+    try {
+      const v = new URLSearchParams(window.location.search).get('view');
+      if (v === 'downloads') {
+        setView('downloads-view');
+        window.history.replaceState({}, '', '/');
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
+  const playDownload = useCallback((rec: SbDownload) => {
+    const q = new URLSearchParams({
+      videoId: rec.id,
+      batchId: rec.batchId || '',
+      subjectId: rec.subjectId || '',
+      schId: rec.schId || rec.id,
+      title: rec.title || 'PW Lecture',
+      batchName: rec.batchName || '',
+      vUrl: rec.vUrl || '',
+      ...(rec.realVideoId ? { lectureVideoId: rec.realVideoId } : {}),
+    });
+    window.open(`/player?${q.toString()}`, '_blank');
   }, []);
 
   // ==================================================================
@@ -564,6 +621,10 @@ export default function StudyBisonApp() {
           <a onClick={() => nav('home-view')} className={view === 'home-view' ? 'active' : ''} id="link-courses" role="button" tabIndex={0}>
             <i className="fas fa-compass"></i> All Courses
           </a>
+          <a onClick={() => nav('downloads-view')} className={view === 'downloads-view' ? 'active' : ''} id="link-downloads" role="button" tabIndex={0}>
+            <i className="fas fa-download"></i> Downloads
+            {downloads.length > 0 ? <span className="dl-count-pill">{downloads.length}</span> : null}
+          </a>
         </div>
         <div id="dev-credit" style={{ marginTop: 'auto', padding: 24, textAlign: 'center', borderTop: '1px solid var(--sb-border-color)', background: 'rgba(0,0,0,0.02)' }}>
           <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--sb-text-muted)', letterSpacing: '0.5px' }}>
@@ -650,6 +711,112 @@ export default function StudyBisonApp() {
         </div>
 
         {/* ================= STUDY VIEW ================= */}
+        {/* ================= DOWNLOADS VIEW (PWA offline library) ================= */}
+        <div id="downloads-view" className={`view-section ${view === 'downloads-view' ? 'active-view' : ''}`}>
+          <div className="breadcrumb-pw">
+            <button className="back-btn" onClick={() => nav('home-view')} aria-label="Back"><i className="fas fa-arrow-left"></i></button>
+            <span>Downloads</span>
+          </div>
+          <div className="dl-page-head">
+            <div className="dl-page-icon"><i className="fas fa-cloud-arrow-down"></i></div>
+            <div>
+              <h5 style={{ fontWeight: 800, margin: 0 }}>Offline Lectures</h5>
+              <p style={{ fontSize: '0.78rem', color: 'var(--sb-text-muted)', margin: '3px 0 0' }}>
+                Download any lecture from the player (⋮ → Download) and watch it without internet.
+                Unlimited downloads — limited only by your device storage.
+              </p>
+            </div>
+          </div>
+
+          {storageEst && storageEst.quota > 0 ? (
+            <div className="dl-storage">
+              <div className="dl-storage-line">
+                <span><i className="fas fa-hard-drive"></i> {formatBytes(storageEst.usage)} used</span>
+                <span>{storageEst.quota ? `${Math.min(100, Math.round((storageEst.usage / storageEst.quota) * 100))}%` : ''}</span>
+              </div>
+              <div className="dl-storage-bar"><span style={{ width: `${Math.min(100, (storageEst.usage / storageEst.quota) * 100)}%` }}></span></div>
+              <div className="dl-storage-sub">of about {formatBytes(storageEst.quota)} available on this device</div>
+            </div>
+          ) : null}
+
+          <div className="px-4 py-3">
+            {downloads.length === 0 ? (
+              <div className="text-center py-4">
+                <i className="fas fa-cloud-arrow-down" style={{ fontSize: '3rem', color: 'var(--sb-text-muted)', opacity: 0.5, marginBottom: 10 }}></i>
+                <h6 style={{ fontWeight: 700 }}>No downloads yet</h6>
+                <p className="text-muted" style={{ fontSize: '0.85rem' }}>
+                  Open any lecture, tap <b>⋮ → Download</b> and it will be available here for offline watching.
+                </p>
+              </div>
+            ) : (
+              <div className="row g-3">
+                {downloads.map((rec) => {
+                  const pct = rec.parts.length > 0 ? Math.round((rec.partsDone / rec.parts.length) * 100) : 0;
+                  const isActive = rec.status === 'downloading' || rec.status === 'collecting';
+                  return (
+                    <div className="col-12" key={rec.id}>
+                      <div className="list-card dl-card" style={{ flexDirection: 'column', alignItems: 'stretch', gap: 10 }}>
+                        <div className="d-flex align-items-start gap-3">
+                          <div className="dl-thumb"><i className="fas fa-play"></i></div>
+                          <div className="flex-grow-1" style={{ minWidth: 0 }}>
+                            <div style={{ fontWeight: 700, fontSize: '0.95rem', lineHeight: 1.25, overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                              {rec.title || 'Lecture'}
+                            </div>
+                            <div style={{ fontSize: '0.72rem', color: 'var(--sb-text-muted)', marginTop: 3 }}>
+                              {rec.batchName || 'PW Batch'} · {new Date(rec.createdAt).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}
+                            </div>
+                            <div style={{ marginTop: 6, display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                              {rec.status === 'done' ? (
+                                <span className="dl-tag dl-tag-ok"><i className="fas fa-circle-check"></i> Offline ready</span>
+                              ) : isActive ? (
+                                <span className="dl-tag dl-tag-busy"><i className="fas fa-spinner fa-spin"></i> Downloading {pct}%</span>
+                              ) : rec.status === 'paused' ? (
+                                <span className="dl-tag dl-tag-warn"><i className="fas fa-pause"></i> Paused {pct}%</span>
+                              ) : (
+                                <span className="dl-tag dl-tag-err"><i className="fas fa-triangle-exclamation"></i> {rec.status === 'error' ? 'Failed' : rec.status}</span>
+                              )}
+                              <span className="dl-tag">{formatBytes(rec.sizeBytes)}</span>
+                              {rec.height ? <span className="dl-tag">{rec.height}p</span> : null}
+                              <span className="dl-tag">{rec.kind.toUpperCase()}</span>
+                            </div>
+                            {isActive || rec.status === 'paused' ? (
+                              <div className="dl-bar" style={{ marginTop: 8 }}>
+                                <span className="dl-bar-fill" style={{ width: `${pct}%` }}></span>
+                              </div>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="d-flex gap-2">
+                          {rec.status === 'done' ? (
+                            <button className="btn btn-sm btn-sb-dark" style={{ flexGrow: 1 }} onClick={() => playDownload(rec)}>
+                              <i className="fas fa-play"></i> Watch offline
+                            </button>
+                          ) : isActive ? (
+                            <button className="btn btn-sm btn-outline-secondary" style={{ flexGrow: 1 }} onClick={() => { void pauseDownload(rec.id); }}>
+                              <i className="fas fa-pause"></i> Pause
+                            </button>
+                          ) : (
+                            <button className="btn btn-sm btn-sb-dark" style={{ flexGrow: 1 }} onClick={() => { void startDownload({
+                              id: rec.id, title: rec.title, batchName: rec.batchName, batchId: rec.batchId,
+                              subjectId: rec.subjectId, schId: rec.schId, realVideoId: rec.realVideoId,
+                              vUrl: rec.vUrl, kind: rec.kind, url: rec.url, clearKeys: rec.clearKeys, poster: rec.poster,
+                            }); }}>
+                              <i className="fas fa-rotate-right"></i> {rec.status === 'paused' ? 'Resume' : 'Retry'}
+                            </button>
+                          )}
+                          <button className="btn btn-sm btn-outline-secondary" onClick={() => { if (window.confirm('Delete this downloaded lecture?')) void deleteDownload(rec.id); }} aria-label={`Delete ${rec.title}`}>
+                            <i className="fas fa-trash" style={{ color: '#e11d48' }}></i>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
         <div id="study-view" className={`view-section ${view === 'study-view' ? 'active-view' : ''}`}>
           <div className="study-header-bg">
             <div style={{ flexGrow: 1, overflow: 'hidden', paddingRight: 15 }}>

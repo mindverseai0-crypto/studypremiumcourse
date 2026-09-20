@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
+import PWARegister from "@/components/pwa-register";
 import "./globals.css";
 
 const inter = Inter({
@@ -19,6 +20,13 @@ export const metadata: Metadata = {
     ],
     apple: "/logo-bison.png?v=2",
   },
+  manifest: "/manifest.webmanifest",
+  applicationName: "Study Bison",
+  appleWebApp: {
+    capable: true,
+    title: "Study Bison",
+    statusBarStyle: "black-translucent",
+  },
 };
 
 export const viewport: Viewport = {
@@ -26,6 +34,7 @@ export const viewport: Viewport = {
   initialScale: 1,
   maximumScale: 1,
   userScalable: false,
+  themeColor: "#111827",
 };
 
 export default function RootLayout({
@@ -41,7 +50,10 @@ export default function RootLayout({
           rel="stylesheet"
         />
       </head>
-      <body className={`${inter.variable} sb-app antialiased`}>{children}</body>
+      <body className={`${inter.variable} sb-app antialiased`}>
+        {children}
+        <PWARegister />
+      </body>
     </html>
   );
 }

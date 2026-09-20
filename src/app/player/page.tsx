@@ -18,6 +18,15 @@ import { api } from '@/lib/api-client';
 import { addXP } from '@/lib/local-state';
 import { isBotName, avatarUrlFor, BOT_NAMES } from '@/lib/bots';
 import { isHlsUrl, isMpdUrl, youtubeId } from '@/lib/video-utils';
+import {
+  SbDownload,
+  findDownloadFor,
+  subscribeDownloads,
+  startDownload,
+  pauseDownload,
+  deleteDownload,
+  formatBytes,
+} from '@/lib/offline';
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
@@ -157,6 +166,11 @@ function PlayerInner() {
   // AI bot students: "Riya is typing…" while the reply is generated
   const [botTyping, setBotTyping] = useState('');
   const [seeding, setSeeding] = useState(false);
+  // PWA offline library
+  const [dlRecord, setDlRecord] = useState<SbDownload | null>(null);
+  const [offlinePlay, setOfflinePlay] = useState(false);
+  const offlinePlayRef = useRef(false);
+  const offlineHeightRef = useRef<number | null>(null);
   const extrasStarted = useRef(false);
   // PiP support can only be detected on the client — decide AFTER hydration,
   // otherwise the kebab sheet renders a different tree on server vs client
@@ -176,6 +190,56 @@ function PlayerInner() {
   const panelType = 'comment' as const;
 
   // ------------------------------------------------------------------
+  // Offline library id for this lecture (stable across sessions).
+  // ------------------------------------------------------------------
+  const dlId = useMemo(() => {
+    if (videoId) return videoId;
+    if (realVideoId) return realVideoId;
+    if (vUrl) return `url:${vUrl.split('?')[0]}`;
+    if (src) {
+      try {
+        return `url:${new URL(src, window.location.href).pathname}`;
+      } catch {
+        return 'player';
+      }
+    }
+    return 'player';
+  }, [videoId, realVideoId, vUrl, src]);
+
+  // Play straight from the offline library (no network at all).
+  const tryOffline = useCallback(async (): Promise<boolean> => {
+    const rec = await findDownloadFor({ videoId, realVideoId, vUrl });
+    if (!rec || rec.status !== 'done' || !rec.url) return false;
+    offlinePlayRef.current = true;
+    offlineHeightRef.current = rec.height;
+    setOfflinePlay(true);
+    setKind(rec.kind);
+    setSrc(rec.url);
+    setClearKeys(rec.clearKeys || null);
+    setPoster(rec.poster || '');
+    setStatus('Playing downloaded copy');
+    setStatusSub('Works without internet');
+    setLoading(false);
+    return true;
+  }, [videoId, realVideoId, vUrl]);
+
+  // Track this lecture's download record (also live-updates progress).
+  useEffect(() => {
+    let alive = true;
+    const refresh = () => {
+      void findDownloadFor({ videoId, realVideoId, vUrl }).then((rec) => {
+        if (alive) setDlRecord(rec);
+      });
+    };
+    refresh();
+    const unsub = subscribeDownloads(refresh);
+    return () => {
+      alive = false;
+      unsub();
+    };
+  }, [videoId, realVideoId, vUrl]);
+
+  // ------------------------------------------------------------------
   // Resolve the playable payload.
   // ------------------------------------------------------------------
   useEffect(() => {
@@ -192,6 +256,20 @@ function PlayerInner() {
       setExtrasLoaded(false);
       extrasStarted.current = false;
       xpGiven.current = false;
+      offlinePlayRef.current = false;
+      offlineHeightRef.current = null;
+      setOfflinePlay(false);
+      // Offline (or the resolver failing below) → play from the offline
+      // library when this lecture has been downloaded.
+      if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+        setStatus('Checking offline library…');
+        const ok = await tryOffline();
+        if (cancelled) return;
+        if (ok) return;
+        setError('You are offline. Download this lecture while connected to watch it offline.');
+        setLoading(false);
+        return;
+      }
       if (vUrl && !/\.cloudfront\.net/i.test(vUrl)) {
         // direct URL (mp4 / m3u8 / mpd / youtube) — non-CloudFront hosts only;
         // CloudFront folders must be signed server-side via parcham_vid.
@@ -225,15 +303,20 @@ function PlayerInner() {
         setLoading(false);
       } catch (e) {
         if (!cancelled) {
-          setError(e instanceof Error ? e.message : 'Playback Engine Failed');
-          setLoading(false);
+          // resolver failed (bad network / expired signature) → downloaded copy?
+          const ok = await tryOffline();
+          if (cancelled) return;
+          if (!ok) {
+            setError(e instanceof Error ? e.message : 'Playback Engine Failed');
+            setLoading(false);
+          }
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [videoId, batchId, subjectId, vUrl, realVideoId]);
+  }, [videoId, batchId, subjectId, vUrl, realVideoId, tryOffline]);
 
   // ------------------------------------------------------------------
   // Attach the source by kind.
@@ -267,7 +350,11 @@ function PlayerInner() {
         const player = new shaka.Player(v);
         shakaRef.current = player;
         player.configure({
-          abr: { enabled: true },
+          // offline playback is pinned to the downloaded rendition
+          abr: { enabled: !offlinePlayRef.current },
+          ...(offlinePlayRef.current && offlineHeightRef.current
+            ? { restrictions: { minHeight: offlineHeightRef.current, maxHeight: offlineHeightRef.current } }
+            : {}),
           ...(clearKeys && Object.keys(clearKeys).length > 0 ? { drm: { clearKeys } } : {}),
         });
         player.addEventListener('error', (evt) => {
@@ -301,6 +388,20 @@ function PlayerInner() {
         player.addEventListener('adaptation', refreshTracks);
         await player.load(src, 0, 'application/dash+xml');
         refreshTracks();
+        // offline: make sure the exact downloaded rendition is selected
+        if (offlinePlayRef.current) {
+          try {
+            const h = offlineHeightRef.current;
+            const tracks = player.getVariantTracks().filter((t) => t.height);
+            if (tracks.length > 0) {
+              const pick = (h ? tracks.find((t) => t.height === h) : null) || tracks[0];
+              player.configure({ abr: { enabled: false } });
+              player.selectVariantTrack(pick, true);
+            }
+          } catch {
+            /* ignore */
+          }
+        }
         await v.play().catch(() => undefined);
       } else if (kind === 'hls') {
         setStatus('Loading HLS stream...');
@@ -598,6 +699,44 @@ function PlayerInner() {
       if (hideTimeout.current) clearTimeout(hideTimeout.current);
     };
   }, [scheduleHide]);
+
+  // ------------------------------------------------------------------
+  // Offline downloads (PWA lecture library).
+  // ------------------------------------------------------------------
+  const dlBusy =
+    dlRecord && (dlRecord.status === 'downloading' || dlRecord.status === 'collecting') ? dlRecord : null;
+  const dlDone = dlRecord && dlRecord.status === 'done' ? dlRecord : null;
+  const isPwKind = kind === 'dash' || kind === 'hls' || kind === 'mp4';
+  const dlSupported = !isSrEmbed && kind !== 'youtube' && isPwKind && Boolean(src);
+
+  const startDl = useCallback(() => {
+    if (!src || kind === 'youtube' || isSrEmbed) return;
+    void startDownload({
+      id: dlId,
+      title: title || 'PW Lecture',
+      batchName,
+      batchId,
+      subjectId,
+      schId: schId || videoId || realVideoId,
+      realVideoId,
+      vUrl,
+      kind: kind === 'youtube' ? 'mp4' : kind,
+      url: src,
+      clearKeys,
+      poster,
+    }).catch(() => undefined);
+  }, [src, kind, isSrEmbed, dlId, title, batchName, batchId, subjectId, schId, videoId, realVideoId, vUrl, clearKeys, poster]);
+
+  const pauseDl = useCallback(() => {
+    void pauseDownload(dlId);
+  }, [dlId]);
+
+  const removeDl = useCallback(() => {
+    if (window.confirm('Delete this downloaded lecture from your device?')) {
+      void deleteDownload(dlId);
+      setMenuOpen(false);
+    }
+  }, [dlId]);
 
   // ------------------------------------------------------------------
   // Side panel — comments (+ AI bot students).
@@ -1213,6 +1352,11 @@ function PlayerInner() {
           <div className="top-bar">
             <div className="top-left">
               <i className="fas fa-arrow-left back-btn" onClick={goBack} role="button" aria-label="Back"></i>
+              {offlinePlay ? (
+                <span className="offline-chip" title="Playing from your downloaded copy">
+                  <i className="fas fa-plane-up"></i> Offline copy
+                </span>
+              ) : null}
             </div>
             <div className="top-icons">
               <i className="fas fa-ellipsis-v icon-btn" onClick={(e) => { e.stopPropagation(); setMenuOpen(true); }} role="button" aria-label="More options"></i>
@@ -1304,6 +1448,17 @@ function PlayerInner() {
                         </button>
                       </>
                     ) : null}
+                    {dlSupported ? (
+                      <button
+                        className="c-btn dl-btn"
+                        aria-label={dlDone ? 'Downloaded — manage' : 'Download for offline'}
+                        title={dlDone ? 'Downloaded for offline' : 'Download for offline'}
+                        onClick={(e) => { e.stopPropagation(); setMenuOpen(true); }}
+                      >
+                        <i className={`fas ${dlBusy ? 'fa-spinner fa-spin' : dlDone ? 'fa-circle-check' : 'fa-download'}`}></i>
+                        {dlDone ? <span className="dl-dot" aria-hidden="true"></span> : null}
+                      </button>
+                    ) : null}
                     <button className="c-btn gear-btn" aria-label="Settings" onClick={(e) => { e.stopPropagation(); setSettingsSheet('root'); }}>
                       <i className="fas fa-cog"></i>
                     </button>
@@ -1394,6 +1549,73 @@ function PlayerInner() {
               <div className="sheet-handle-wrap"><div className="sheet-handle"></div></div>
               <div className="sheet-title"><i className="fas fa-ellipsis-v" style={{ color: '#9ca3af' }}></i> More options</div>
               <div className="sheet-sep"></div>
+
+              {dlSupported ? (
+                dlBusy ? (
+                  <div className="sheet-row dl-row" role="button" tabIndex={0} aria-label="Pause download" onClick={pauseDl}>
+                    <span className="row-icon"><i className="fas fa-pause"></i></span>
+                    <span className="dl-main">
+                      <span className="dl-line">
+                        <span>Downloading… {dlRecord && dlRecord.parts.length > 0 ? Math.round((dlRecord.partsDone / dlRecord.parts.length) * 100) : 0}%</span>
+                        <span className="dl-size">{formatBytes(dlRecord?.sizeBytes || 0)}</span>
+                      </span>
+                      <span className="dl-bar">
+                        <span
+                          className="dl-bar-fill"
+                          style={{ width: dlRecord && dlRecord.parts.length > 0 ? `${Math.round((dlRecord.partsDone / dlRecord.parts.length) * 100)}%` : '0%' }}
+                        ></span>
+                      </span>
+                      <span className="dl-sub">{dlRecord ? `${dlRecord.partsDone}/${dlRecord.parts.length} parts · tap to pause` : ''}</span>
+                    </span>
+                  </div>
+                ) : dlRecord && dlRecord.status === 'paused' ? (
+                  <>
+                    <div className="sheet-row dl-row" role="button" tabIndex={0} aria-label="Resume download" onClick={startDl}>
+                      <span className="row-icon"><i className="fas fa-play"></i></span>
+                      <span className="dl-main">
+                        <span className="dl-line"><span>Paused</span><span className="dl-size">{formatBytes(dlRecord.sizeBytes)}</span></span>
+                        <span className="dl-bar">
+                          <span
+                            className="dl-bar-fill paused"
+                            style={{ width: dlRecord.parts.length > 0 ? `${Math.round((dlRecord.partsDone / dlRecord.parts.length) * 100)}%` : '0%' }}
+                          ></span>
+                        </span>
+                        <span className="dl-sub">{dlRecord.partsDone}/{dlRecord.parts.length} parts · tap to resume</span>
+                      </span>
+                    </div>
+                  </>
+                ) : dlDone ? (
+                  <>
+                    <div className="sheet-row" style={{ cursor: 'default' }}>
+                      <span className="row-icon"><i className="fas fa-circle-check" style={{ color: '#22c55e' }}></i></span>
+                      <span>Downloaded for offline</span>
+                      <span className="row-val" style={{ fontSize: '0.68rem', color: '#9ca3af' }}>
+                        {formatBytes(dlDone.sizeBytes)}{dlDone.height ? ` · ${dlDone.height}p` : ''}
+                      </span>
+                    </div>
+                    <div className="sheet-row" onClick={removeDl} role="button" tabIndex={0} aria-label="Delete download">
+                      <span className="row-icon"><i className="fas fa-trash" style={{ color: '#f87171' }}></i></span>
+                      <span style={{ color: '#f87171' }}>Delete download</span>
+                    </div>
+                  </>
+                ) : dlRecord && dlRecord.status === 'error' ? (
+                  <div className="sheet-row" onClick={startDl} role="button" tabIndex={0} aria-label="Retry download">
+                    <span className="row-icon"><i className="fas fa-triangle-exclamation" style={{ color: '#fbbf24' }}></i></span>
+                    <span className="dl-main">
+                      <span>Download failed — tap to retry</span>
+                      {dlRecord.error ? <span className="dl-sub">{dlRecord.error}</span> : null}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="sheet-row" onClick={startDl} role="button" tabIndex={0} aria-label="Download lecture for offline">
+                    <span className="row-icon"><i className="fas fa-download"></i></span>
+                    <span>Download</span>
+                    <span className="row-val" style={{ fontSize: '0.68rem', color: '#9ca3af' }}>Watch offline</span>
+                  </div>
+                )
+              ) : null}
+              {dlSupported ? <div className="sheet-sep"></div> : null}
+
               {pipAvailable ? (
                 <div className="sheet-row" onClick={togglePip}>
                   <span className="row-icon"><i className="fas fa-clone"></i></span>
