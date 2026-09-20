@@ -3,11 +3,12 @@
 // Study Bison video player — PW-app style.
 // Streams: DASH (ClearKey via shaka), HLS (hls.js), YouTube embeds, mp4.
 // UI: minimal top bar (back + kebab), time + speed chip, buffered seek bar
-// with scrub tooltip, control row (play · ±10s · volume ‖ comments · doubts ·
-// slides · notes · settings · fullscreen) and a side panel / bottom sheet
-// with Comments, Doubts, Slides, Notes and Attachments tabs.
-// Backend: /api/player/interactions (comments+doubts, one-level replies) and
-// /api/player/extras (slides/notes/attachments from the lecture schedule).
+// with scrub tooltip, control row (play · ±10s · volume ‖ comments · notes ·
+// settings · fullscreen) and a side panel / bottom sheet with Comments,
+// Notes and Attachments (Notes + DPP PDFs) tabs.
+// Backend: /api/player/interactions (comments, one-level replies),
+// /api/player/bots (AI bot students that chat + answer real doubts) and
+// /api/player/extras (notes/dpps/attachments from the lecture schedule).
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import type HlsType from 'hls.js';
@@ -15,12 +16,13 @@ import type ShakaNamespace from 'shaka-player';
 import './player.css';
 import { api } from '@/lib/api-client';
 import { addXP } from '@/lib/local-state';
+import { isBotName, avatarUrlFor, BOT_NAMES } from '@/lib/bots';
 import { isHlsUrl, isMpdUrl, youtubeId } from '@/lib/video-utils';
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 
 type PlayerKind = '' | 'dash' | 'hls' | 'youtube' | 'mp4';
-type PanelTab = '' | 'comments' | 'doubts' | 'slides' | 'notes' | 'attachments';
+type PanelTab = '' | 'comments' | 'notes' | 'attachments';
 type SheetView = '' | 'root' | 'speed' | 'quality';
 
 interface ReplyItem {
@@ -62,28 +64,18 @@ function timeAgo(iso: string): string {
   return new Date(then).toLocaleDateString();
 }
 
-/* Doubt (Q+A bubbles) icon — FA free has no Q&A glyph. */
-function DoubtIcon(): React.ReactElement {
-  return (
-    <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="1.8" y="3" width="13" height="10.5" rx="2.6" />
-      <text x="8.3" y="10.9" fontSize="7.4" fontWeight="800" fill="currentColor" stroke="none" textAnchor="middle" fontFamily="Inter, sans-serif">Q</text>
-      <path d="M4.5 13.5v3.2l3.4-3.2" />
-      <rect x="12.6" y="11.2" width="9.6" height="8" rx="2.1" fill="#000" />
-      <rect x="12.6" y="11.2" width="9.6" height="8" rx="2.1" />
-      <text x="17.4" y="17" fontSize="5.6" fontWeight="800" fill="currentColor" stroke="none" textAnchor="middle" fontFamily="Inter, sans-serif">A</text>
-    </svg>
-  );
-}
-
-/* Slides icon — framed play (lecture deck). */
-function SlidesIcon(): React.ReactElement {
-  return (
-    <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      <rect x="2.4" y="4.2" width="19.2" height="15.6" rx="2.6" />
-      <path d="M10.2 9.1v5.8l5.2-2.9z" fill="currentColor" stroke="none" />
-    </svg>
-  );
+/* Profile picture for a comment author — bot students get cartoon DPs,
+   real students keep the initials avatar. */
+function AuthorAvatar({ name, small = false }: { name: string; small?: boolean }) {
+  const cls = `cm-avatar${small ? ' sm' : ''}${isBotName(name) ? ' bot' : ''}`;
+  if (isBotName(name)) {
+    return (
+      <span className={cls} aria-hidden="true">
+        <img src={avatarUrlFor(name)} alt="" width={34} height={34} loading="lazy" />
+      </span>
+    );
+  }
+  return <span className={cls}>{(name || 'S').charAt(0)}</span>;
 }
 
 function PlayerInner() {
@@ -95,6 +87,7 @@ function PlayerInner() {
   // slides/notes/attachments, more reliable than the lecture/video id
   const schId = params.get('schId') || '';
   const title = params.get('title') || 'PW Lecture';
+  const batchName = params.get('batchName') || '';
   const vUrl = params.get('vUrl') || '';
   // real PW video id (videoDetails._id) when it differs from the schedule id
   const realVideoId = params.get('lectureVideoId') || '';
@@ -157,10 +150,13 @@ function PlayerInner() {
   const [displayName, setDisplayName] = useState('');
   const [nameEditing, setNameEditing] = useState(false);
   const [nameDraft, setNameDraft] = useState('');
-  const [extras, setExtras] = useState<{ slides: DocItem[]; notes: DocItem[]; attachments: DocItem[] }>({ slides: [], notes: [], attachments: [] });
+  const [extras, setExtras] = useState<{ notes: DocItem[]; dpps: DocItem[]; attachments: DocItem[] }>({ notes: [], dpps: [], attachments: [] });
   const [extrasLoading, setExtrasLoading] = useState(false);
   const [extrasLoaded, setExtrasLoaded] = useState(false);
   const [viewingDoc, setViewingDoc] = useState<DocItem | null>(null);
+  // AI bot students: "Riya is typing…" while the reply is generated
+  const [botTyping, setBotTyping] = useState('');
+  const [seeding, setSeeding] = useState(false);
   const extrasStarted = useRef(false);
   // PiP support can only be detected on the client — decide AFTER hydration,
   // otherwise the kebab sheet renders a different tree on server vs client
@@ -177,7 +173,7 @@ function PlayerInner() {
     return 'player';
   }, [videoId, realVideoId, vUrl]);
 
-  const panelType = panel === 'doubts' ? 'doubt' : 'comment';
+  const panelType = 'comment' as const;
 
   // ------------------------------------------------------------------
   // Resolve the playable payload.
@@ -192,7 +188,7 @@ function PlayerInner() {
       setHlsLevels([]);
       setDashList([]);
       setQualitySel('auto');
-      setExtras({ slides: [], notes: [], attachments: [] });
+      setExtras({ notes: [], dpps: [], attachments: [] });
       setExtrasLoaded(false);
       extrasStarted.current = false;
       xpGiven.current = false;
@@ -604,21 +600,40 @@ function PlayerInner() {
   }, [scheduleHide]);
 
   // ------------------------------------------------------------------
-  // Side panel — interactions (comments / doubts).
+  // Side panel — comments (+ AI bot students).
   // ------------------------------------------------------------------
-  const loadItems = useCallback(async (type: 'comment' | 'doubt') => {
+  const loadItems = useCallback(async (): Promise<TopItem[]> => {
     setListLoading(true);
     setSubmitErr('');
     try {
-      const res = await fetch(`/api/player/interactions?threadKey=${encodeURIComponent(threadKey)}&type=${type}`);
+      const res = await fetch(`/api/player/interactions?threadKey=${encodeURIComponent(threadKey)}&type=comment`);
       const body = (await res.json()) as { success?: boolean; items?: TopItem[] };
-      setItems(body.success && Array.isArray(body.items) ? body.items : []);
+      const list = body.success && Array.isArray(body.items) ? body.items : [];
+      setItems(list);
+      return list;
     } catch {
       setItems([]);
+      return [];
     } finally {
       setListLoading(false);
     }
   }, [threadKey]);
+
+  // First visit to an empty lecture thread: let the bot students start the
+  // conversation (idempotent server-side), then reload the list.
+  const ensureBots = useCallback(async () => {
+    try {
+      const res = await fetch('/api/player/bots', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'seed', threadKey, title, batchName }),
+      });
+      const body = (await res.json()) as { success?: boolean; seeded?: boolean };
+      if (body?.success && body?.seeded) await loadItems();
+    } catch {
+      /* best-effort */
+    }
+  }, [threadKey, title, batchName, loadItems]);
 
   // ------------------------------------------------------------------
   // Docs (slides / notes / attachments) — fetched once per lecture.
@@ -636,10 +651,10 @@ function PlayerInner() {
     });
     fetch(`/api/player/extras?${q.toString()}`)
       .then((r) => r.json())
-      .then((body: { success?: boolean; slides?: DocItem[]; notes?: DocItem[]; attachments?: DocItem[] }) => {
+      .then((body: { success?: boolean; notes?: DocItem[]; dpps?: DocItem[]; attachments?: DocItem[] }) => {
         setExtras({
-          slides: Array.isArray(body.slides) ? body.slides : [],
           notes: Array.isArray(body.notes) ? body.notes : [],
+          dpps: Array.isArray(body.dpps) ? body.dpps : [],
           attachments: Array.isArray(body.attachments) ? body.attachments : [],
         });
         setExtrasLoaded(true);
@@ -651,7 +666,7 @@ function PlayerInner() {
       .finally(() => setExtrasLoading(false));
   }, [batchId, schId, videoId, realVideoId, subjectId]);
 
-  // Prefetch docs for EVERY lecture so Slides/Notes/Attachments tabs are
+  // Prefetch docs for EVERY lecture so Notes/Attachments tabs are
   // populated (with counts) without requiring the user to open them first.
   useEffect(() => {
     if (isSrEmbed || kind === 'youtube') return;
@@ -659,19 +674,44 @@ function PlayerInner() {
     loadExtras();
   }, [loadExtras, batchId, schId, videoId, realVideoId, isSrEmbed, kind]);
 
+  // Attachments tab = other files + Notes PDFs + DPP PDFs (deduped by url).
+  const attachmentDocs = useMemo<Array<DocItem & { tag: string }>>(() => {
+    const seen = new Set<string>();
+    const out: Array<DocItem & { tag: string }> = [];
+    for (const [tag, list] of [
+      ['Notes', extras.notes],
+      ['DPP', extras.dpps],
+      ['File', extras.attachments],
+    ] as Array<[string, DocItem[]]>) {
+      for (const d of list) {
+        if (seen.has(d.url)) continue;
+        seen.add(d.url);
+        out.push({ ...d, tag });
+      }
+    }
+    return out;
+  }, [extras]);
+
   const openPanel = useCallback((tab: PanelTab) => {
     setPanel(tab);
     setViewingDoc(null);
     setReplyTo(null);
     setDraft('');
     setSubmitErr('');
-    if (tab === 'comments' || tab === 'doubts') {
+    if (tab === 'comments') {
       setItems([]);
-      void loadItems(tab === 'doubts' ? 'doubt' : 'comment');
-    } else if (tab === 'slides' || tab === 'notes' || tab === 'attachments') {
+      void (async () => {
+        const loaded = await loadItems();
+        if (loaded.length === 0) {
+          setSeeding(true);
+          await ensureBots();
+          setSeeding(false);
+        }
+      })();
+    } else if (tab === 'notes' || tab === 'attachments') {
       if (!extrasLoaded) loadExtras();
     }
-  }, [loadItems, extrasLoaded, loadExtras]);
+  }, [loadItems, ensureBots, extrasLoaded, loadExtras]);
 
   const closePanel = useCallback(() => {
     setPanel('');
@@ -680,10 +720,51 @@ function PlayerInner() {
 
   // keep the discussion list pinned to the newest message
   useEffect(() => {
-    if ((panel === 'comments' || panel === 'doubts') && !listLoading && listRef.current) {
+    if (panel === 'comments' && !listLoading && listRef.current) {
       listRef.current.scrollTop = listRef.current.scrollHeight;
     }
-  }, [panel, items, listLoading]);
+  }, [panel, items, botTyping, listLoading]);
+
+  // AI bot student answers a real student's post. The typing indicator shows
+  // for at least ~2s so the reply lands with a human rhythm.
+  const triggerBotReply = useCallback(
+    async (commentId: string, text: string) => {
+      const botName = BOT_NAMES[Math.floor(Math.random() * BOT_NAMES.length)];
+      setBotTyping(botName);
+      const startedAt = Date.now();
+      try {
+        const res = await fetch('/api/player/bots', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'reply',
+            threadKey,
+            commentId,
+            text,
+            author: displayName.trim() || 'Student',
+            title,
+            batchName,
+            preferredBot: botName,
+          }),
+        });
+        const body = (await res.json()) as { success?: boolean; item?: ReplyItem };
+        if (body?.success && body.item) {
+          const item = body.item;
+          const wait = Math.max(0, 2200 - (Date.now() - startedAt));
+          if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+          // replies are anchored to the top-level ancestor by the API
+          setItems((prev) =>
+            prev.map((it) => (it.id === item.parentId ? { ...it, replies: [...it.replies, item] } : it)),
+          );
+        }
+      } catch {
+        /* silent — the user's own comment is already visible */
+      } finally {
+        setBotTyping('');
+      }
+    },
+    [threadKey, displayName, title, batchName],
+  );
 
   const submitPost = useCallback(async () => {
     const text = draft.trim();
@@ -714,12 +795,14 @@ function PlayerInner() {
       }
       setDraft('');
       setReplyTo(null);
+      // a bot student answers shortly after the real user posts
+      void triggerBotReply(item.id, text);
     } catch (e) {
       setSubmitErr(e instanceof Error ? e.message : 'Could not post. Try again.');
     } finally {
       setPosting(false);
     }
-  }, [draft, posting, threadKey, panelType, displayName, replyTo]);
+  }, [draft, posting, threadKey, panelType, displayName, replyTo, triggerBotReply]);
 
   const saveName = useCallback(() => {
     const n = nameDraft.trim().slice(0, 40);
@@ -951,42 +1034,34 @@ function PlayerInner() {
               <>
                 <div className="panel-head">
                   <button className={`panel-tab ${panel === 'comments' ? 'active' : ''}`} onClick={() => openPanel('comments')}>Comments</button>
-                  <button className={`panel-tab ${panel === 'doubts' ? 'active' : ''}`} onClick={() => openPanel('doubts')}>Doubts</button>
-                  <button className={`panel-tab ${panel === 'slides' ? 'active' : ''}`} onClick={() => openPanel('slides')}>
-                    Slides{extras.slides.length > 0 ? <span className="tab-count">{extras.slides.length}</span> : null}
-                  </button>
                   <button className={`panel-tab ${panel === 'notes' ? 'active' : ''}`} onClick={() => openPanel('notes')}>
                     Notes{extras.notes.length > 0 ? <span className="tab-count">{extras.notes.length}</span> : null}
                   </button>
                   <button className={`panel-tab ${panel === 'attachments' ? 'active' : ''}`} onClick={() => openPanel('attachments')}>
-                    Attach{extras.attachments.length > 0 ? <span className="tab-count">{extras.attachments.length}</span> : null}
+                    Attach{attachmentDocs.length > 0 ? <span className="tab-count">{attachmentDocs.length}</span> : null}
                   </button>
                   <button className="panel-close" aria-label="Close panel" onClick={closePanel}>
                     <i className="fas fa-times"></i>
                   </button>
                 </div>
 
-                {(panel === 'comments' || panel === 'doubts') ? (
+                {panel === 'comments' ? (
                   <div className="panel-body">
                     <div className="panel-list" ref={listRef}>
-                      {listLoading ? (
+                      {listLoading || seeding ? (
                         <div className="panel-loading"><i className="fas fa-spinner fa-spin"></i> Loading…</div>
                       ) : items.length === 0 ? (
                         <div className="panel-empty">
-                          {panel === 'doubts' ? <DoubtIcon /> : <i className="far fa-comment-dots"></i>}
-                          <div className="pe-title">{panel === 'doubts' ? 'No doubts yet' : 'No comments yet'}</div>
-                          <div className="pe-sub">
-                            {panel === 'doubts'
-                              ? 'Stuck somewhere in this lecture? Ask your doubt below and get it cleared.'
-                              : 'Be the first to share your thoughts on this lecture.'}
-                          </div>
+                          <i className="far fa-comment-dots"></i>
+                          <div className="pe-title">No comments yet</div>
+                          <div className="pe-sub">Be the first to share your thoughts on this lecture.</div>
                         </div>
                       ) : (
                         <>
                           {items.map((it) => (
                             <div key={it.id}>
                               <div className="cm">
-                                <div className="cm-avatar">{(it.author || 'S').charAt(0)}</div>
+                                <AuthorAvatar name={it.author || 'Student'} />
                                 <div className="cm-main">
                                   <div className="cm-top">
                                     <span className="cm-name">{it.author || 'Student'}</span>
@@ -999,26 +1074,35 @@ function PlayerInner() {
                                 </div>
                               </div>
                               {it.replies.length > 0 ? (
-                                <>
-                                  <div className="cm-replies">
-                                    {it.replies.map((r) => (
-                                      <div className="cm" key={r.id}>
-                                        <div className="cm-avatar sm">{(r.author || 'S').charAt(0)}</div>
-                                        <div className="cm-main">
-                                          <div className="cm-top">
-                                            <span className="cm-name">{r.author || 'Student'}</span>
-                                            <span className="cm-time">{timeAgo(r.createdAt)}</span>
-                                          </div>
-                                          <div className="cm-text">{r.text}</div>
+                                <div className="cm-replies">
+                                  {it.replies.map((r) => (
+                                    <div className="cm" key={r.id}>
+                                      <AuthorAvatar name={r.author || 'Student'} small />
+                                      <div className="cm-main">
+                                        <div className="cm-top">
+                                          <span className="cm-name">{r.author || 'Student'}</span>
+                                          <span className="cm-time">{timeAgo(r.createdAt)}</span>
                                         </div>
+                                        <div className="cm-text">{r.text}</div>
                                       </div>
-                                    ))}
-                                  </div>
-                                </>
+                                    </div>
+                                  ))}
+                                </div>
                               ) : null}
                             </div>
                           ))}
-                          <div className="list-end">You&apos;re all caught up</div>
+                          {botTyping ? (
+                            <div className="cm typing-row" aria-live="polite">
+                              <AuthorAvatar name={botTyping} />
+                              <div className="cm-main">
+                                <div className="cm-top">
+                                  <span className="cm-name">{botTyping}</span>
+                                </div>
+                                <div className="cm-text typing"><span className="tdot"></span><span className="tdot"></span><span className="tdot"></span></div>
+                              </div>
+                            </div>
+                          ) : null}
+                          {!botTyping ? <div className="list-end">You&apos;re all caught up</div> : null}
                         </>
                       )}
                     </div>
@@ -1056,7 +1140,7 @@ function PlayerInner() {
                       <div className="composer">
                         <input
                           value={draft}
-                          placeholder={panel === 'doubts' ? 'Have a doubt? Ask here…' : 'Add a comment…'}
+                          placeholder="Add a comment…"
                           maxLength={2000}
                           onChange={(e) => setDraft(e.target.value)}
                           onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submitPost(); } }}
@@ -1073,13 +1157,6 @@ function PlayerInner() {
                       <div className="panel-loading"><i className="fas fa-spinner fa-spin"></i> Loading…</div>
                     ) : (
                       <>
-                        {panel === 'slides' && extras.slides.length === 0 ? (
-                          <div className="panel-empty">
-                            <SlidesIcon />
-                            <div className="pe-title">No slides</div>
-                            <div className="pe-sub">Slides shared by the educator for this lecture will appear here.</div>
-                          </div>
-                        ) : null}
                         {panel === 'notes' && extras.notes.length === 0 ? (
                           <div className="panel-empty">
                             <i className="far fa-file-pdf"></i>
@@ -1087,19 +1164,22 @@ function PlayerInner() {
                             <div className="pe-sub">Class notes for this lecture will appear here.</div>
                           </div>
                         ) : null}
-                        {panel === 'attachments' && extras.attachments.length === 0 ? (
+                        {panel === 'attachments' && attachmentDocs.length === 0 ? (
                           <div className="panel-empty">
                             <i className="fas fa-paperclip"></i>
                             <div className="pe-title">No attachments</div>
-                            <div className="pe-sub">DPPs and other resources will appear here.</div>
+                            <div className="pe-sub">Notes, DPPs and other resources for this lecture will appear here.</div>
                           </div>
                         ) : null}
-                        {(panel === 'slides' ? extras.slides : panel === 'notes' ? extras.notes : extras.attachments).length > 0 ? (
+                        {(panel === 'notes' ? extras.notes : attachmentDocs).length > 0 ? (
                           <div className="panel-list">
-                            {(panel === 'slides' ? extras.slides : panel === 'notes' ? extras.notes : extras.attachments).map((d) => (
+                            {(panel === 'notes' ? extras.notes : attachmentDocs).map((d) => (
                               <div className="doc-item" key={d.url}>
                                 <i className="far fa-file-pdf doc-icon"></i>
-                                <div className="doc-name">{d.name || 'Document'}</div>
+                                <div className="doc-name">
+                                  {d.name || 'Document'}
+                                  {'tag' in d && d.tag ? <span className="doc-tag">{d.tag}</span> : null}
+                                </div>
                                 <button className="doc-btn primary" onClick={() => setViewingDoc(d)}>View</button>
                                 <a className="doc-btn" href={d.url} target="_blank" rel="noreferrer">Open</a>
                               </div>
@@ -1116,7 +1196,7 @@ function PlayerInner() {
         ) : null}
 
         {/* -------- restore affordance: bring the player controls and
-             the options (comments, doubts, slides, notes…) back after
+             the options (comments, notes, attachments…) back after
              they auto-hide during playback -------- */}
         {controlsHidden && !error && !isSrEmbed ? (
           <button
@@ -1218,12 +1298,6 @@ function PlayerInner() {
                       <>
                         <button className="c-btn panel-btn" aria-label="Comments" title="Comments" onClick={(e) => { e.stopPropagation(); openPanel('comments'); }}>
                           <i className="far fa-comment-dots"></i>
-                        </button>
-                        <button className="c-btn panel-btn" aria-label="Doubts" title="Doubts" onClick={(e) => { e.stopPropagation(); openPanel('doubts'); }}>
-                          <DoubtIcon />
-                        </button>
-                        <button className="c-btn panel-btn" aria-label="Slides" title="Slides" onClick={(e) => { e.stopPropagation(); openPanel('slides'); }}>
-                          <SlidesIcon />
                         </button>
                         <button className="c-btn panel-btn" aria-label="Notes" title="Notes" onClick={(e) => { e.stopPropagation(); openPanel('notes'); }}>
                           <i className="far fa-edit"></i>

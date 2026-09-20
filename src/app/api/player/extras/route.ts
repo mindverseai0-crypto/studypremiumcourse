@@ -1,14 +1,19 @@
 // ============================================================================
-// Player extras API — slides / notes / attachments for the current lecture.
+// Player extras API — documents for the current lecture.
 //
 // GET /api/player/extras?batchId&scheduleId&subjectId&videoId
-//   → { success: true, slides: [{name,url}], notes: [...], attachments: [...] }
+//   → { success: true, notes: [{name,url}], dpps: [...], attachments: [...] }
+//
+//   notes       — class notes (homework attachments)
+//   dpps        — DPP PDFs (upstream nests them under dpp.homeworkIds)
+//   attachments — exercise/DPP attachments + any doc urls (former "slides"
+//                 fields folded in here so nothing is lost)
 //
 // All params optional, but at least scheduleId or videoId is expected
 // (whichever is present is used as the upstream content id). The upstream
-// schedule-detail call is guarded by a 12s timeout; ANY failure, timeout or
-// unexpected upstream shape degrades to a 200 with empty arrays + `warning`
-// so the player panel never hangs or breaks.
+// schedule-detail call is cached in lx-api and guarded by a 12s timeout; ANY
+// failure, timeout or unexpected upstream shape degrades to a 200 with empty
+// arrays + `warning` so the player panel never hangs or breaks.
 // ============================================================================
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -143,16 +148,16 @@ export async function GET(request: NextRequest) {
     if (candidates.length === 0) {
       return NextResponse.json({
         success: true,
-        slides: [],
         notes: [],
+        dpps: [],
         attachments: [],
         warning: 'scheduleId or videoId is required',
       });
     }
 
     const extract = (detail: LxScheduleItem & Record<string, unknown>): {
-      slides: ExtrasItem[];
       notes: ExtrasItem[];
+      dpps: ExtrasItem[];
       attachments: ExtrasItem[];
     } => {
       const videoDetails =
@@ -160,17 +165,20 @@ export async function GET(request: NextRequest) {
           ? (detail.videoDetails as unknown as Record<string, unknown>)
           : null;
 
-      // notes: homework attachments (upstream also nests DPP notes under dpp.homeworkIds —
-      // the frontend LectureData shape sees them merged, so merge here too).
+      // notes: homework attachments
       const notes: ExtrasItem[] = [];
       flattenContentNodes(notes, detail.homeworkIds, (n) =>
         typeof n.topic === 'string' ? n.topic.trim() : '',
       );
-      flattenContentNodes(notes, (detail.dpp as Record<string, unknown> | null | undefined)?.homeworkIds, (n) =>
+
+      // dpps: DPP notes nested under dpp.homeworkIds
+      const dpps: ExtrasItem[] = [];
+      flattenContentNodes(dpps, (detail.dpp as Record<string, unknown> | null | undefined)?.homeworkIds, (n) =>
         typeof n.topic === 'string' ? n.topic.trim() : '',
       );
 
-      // attachments: exercise/DPP attachments
+      // attachments: exercise/DPP attachments + any doc urls (the Slides
+      // section was removed — those fields fold in here so docs stay reachable)
       const attachments: ExtrasItem[] = [];
       flattenContentNodes(attachments, detail.exerciseIds, (n) => {
         for (const field of ['title', 'topic', 'name'] as const) {
@@ -179,26 +187,23 @@ export async function GET(request: NextRequest) {
         }
         return '';
       });
-
-      // slides: doc-ish fields directly on the item or its videoDetails
-      const slides: ExtrasItem[] = [];
+      const DOC_FIELDS = ['videoDocUrl', 'docUrl', 'slidesUrl', 'docUrlObj', 'attachmentIds'] as const;
       const slideSources: Array<Record<string, unknown>> = [detail];
       if (videoDetails) slideSources.push(videoDetails as Record<string, unknown>);
-      const DOC_FIELDS = ['videoDocUrl', 'docUrl', 'slidesUrl', 'docUrlObj', 'attachmentIds'] as const;
       for (const source of slideSources) {
         for (const field of DOC_FIELDS) {
-          pushDocLike(slides, source[field], 'Slides');
+          pushDocLike(attachments, source[field], 'Document');
         }
       }
 
       return {
-        slides: dedupeByUrl(slides),
         notes: dedupeByUrl(notes),
+        dpps: dedupeByUrl(dpps),
         attachments: dedupeByUrl(attachments),
       };
     };
 
-    let last = { slides: [] as ExtrasItem[], notes: [] as ExtrasItem[], attachments: [] as ExtrasItem[] };
+    let last = { notes: [] as ExtrasItem[], dpps: [] as ExtrasItem[], attachments: [] as ExtrasItem[] };
     let notFound = 0;
 
     for (const contentId of candidates) {
@@ -220,7 +225,7 @@ export async function GET(request: NextRequest) {
       }
 
       last = extract(raced as LxScheduleItem & Record<string, unknown>);
-      if (last.slides.length || last.notes.length || last.attachments.length) break;
+      if (last.notes.length || last.dpps.length || last.attachments.length) break;
     }
 
     return NextResponse.json({
@@ -232,8 +237,8 @@ export async function GET(request: NextRequest) {
     console.error('[api/player/extras] GET failed:', error);
     return NextResponse.json({
       success: true,
-      slides: [],
       notes: [],
+      dpps: [],
       attachments: [],
       warning: 'unexpected error while loading extras',
     });
