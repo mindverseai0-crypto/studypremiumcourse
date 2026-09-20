@@ -217,6 +217,18 @@ export function parseSignedUrl(raw: string): { ok: true; sig: ParsedSignature } 
       /* ignore */
     }
   }
+  // Folder-wide policies ("…/<folder>/*") carry no asset path — fall back to
+  // the PASTED URL's own subpath so kind detection (mpd/m3u8/mp4) stays true
+  // to what was actually pasted.
+  if (folder && !subPath && urlPart) {
+    try {
+      const u = new URL(urlPart);
+      const parts = u.pathname.split('/').filter(Boolean);
+      if (parts[0] === folder) subPath = parts.slice(1).join('/');
+    } catch {
+      /* ignore */
+    }
+  }
   if (!/^[a-f0-9-]{16,}$/i.test(folder)) {
     return { ok: false, error: 'Could not determine the video folder from this URL (no UUID path segment found).' };
   }

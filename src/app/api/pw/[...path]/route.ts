@@ -50,8 +50,50 @@ function buildAssetPath(folder: string, asset: string[]): string | null {
   return [folder, ...asset].map(encodeURIComponent).join('/');
 }
 
+/**
+ * Resolve a playlist URI against the PLAYLIST's own directory so relative
+ * names ("000.ts", "../enc.key") become folder-root-relative. Absolute
+ * http(s) URLs are returned untouched — joinUri() keeps handling those
+ * against the folder root. NOTE: joinUri() cannot resolve leading ".."
+ * against a non-root base (its stack starts empty), so this resolver
+ * applies the playlist dir itself before joining.
+ */
+function resolveUriToFolderRoot(uri: string, subDir: string): string {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(uri)) return uri; // absolute / data: URI
+  const out: string[] = uri.startsWith('/') ? [] : subDir.split('/').filter(Boolean);
+  for (const seg of uri.split('/')) {
+    if (!seg || seg === '.') continue;
+    if (seg === '..') out.pop();
+    else out.push(seg);
+  }
+  return out.map(encodeURIComponent).join('/');
+}
+
+/**
+ * PW HLS manifests reference their AES-128 key through the penpencil API:
+ *   https://api.penpencil.co/v1/videos/get-hls-key?videoKey=<folder>&key=enc.key
+ * That host is CORS/WAF-blocked for this app, but the signed folder ships
+ * the same key file one level ABOVE the rendition dir (…/hls/enc.key) —
+ * exactly where the owner's own proxy rewrites it ("../enc.key"). Map the
+ * URI to that folder-relative form so the key streams through this relay.
+ */
+function penpencilKeyUri(uri: string, folder: string): string {
+  if (!/penpencil\.co/i.test(uri) || !/get-hls-key/i.test(uri)) return uri;
+  let videoKey = '';
+  let keyFile = 'enc.key';
+  try {
+    const u = new URL(uri);
+    videoKey = u.searchParams.get('videoKey') || '';
+    keyFile = (u.searchParams.get('key') || 'enc.key').replace(/[^A-Za-z0-9._-]/g, '') || 'enc.key';
+  } catch {
+    /* keep defaults */
+  }
+  if (videoKey && videoKey !== folder) return uri; // another folder's key — cannot serve
+  return `../${keyFile}`; // resolved against the playlist dir → hls/enc.key
+}
+
 /** Rewrite every playlist URI (absolute or relative) to our relay route. */
-function rewritePlaylist(body: string, base: string, host: string): string {
+function rewritePlaylist(body: string, base: string, host: string, folder: string, subDir = ''): string {
   return body
     .split('\n')
     .map((rawLine) => {
@@ -60,11 +102,14 @@ function rewritePlaylist(body: string, base: string, host: string): string {
       if (line.startsWith('#')) {
         // rewrite URIs inside tags (KEY / MAP / EXT-X-MEDIA etc.)
         if (/^#(EXT-X-KEY|EXT-X-MAP|EXT-X-MEDIA|EXT-X-I-FRAME-STREAM-INF|EXT-X-SESSION-KEY)/i.test(line)) {
-          return line.replace(/URI="([^"]+)"/i, (_m, uri: string) => `URI="${joinUri(base, uri, host)}"`);
+          return line.replace(/URI="([^"]+)"/i, (_m, uri: string) => {
+            const target = resolveUriToFolderRoot(penpencilKeyUri(uri, folder), subDir);
+            return `URI="${joinUri(base, target, host)}"`;
+          });
         }
         return rawLine;
       }
-      return joinUri(base, line, host);
+      return joinUri(base, resolveUriToFolderRoot(line, subDir), host);
     })
     .join('\n');
 }
@@ -192,7 +237,12 @@ export async function GET(request: NextRequest, ctx: { params: Promise<{ path: s
     // Always carry a stateless signature segment so segments need no registry
     const sigSeg = sigSegment ?? Buffer.from(signedQuery, 'utf8').toString('base64url');
     const base = `/api/pw${hostSeg}/${folder}/s/${sigSeg}`;
-    const body = isPlaylist ? rewritePlaylist(text, base, host) : rewriteMpd(text, base, host, folder);
+    // Nested manifests (e.g. hls/720/main.m3u8) carry RELATIVE segment URIs
+    // — resolve them against the manifest's own directory, not the folder root.
+    const subDir = asset.slice(0, -1).map(encodeURIComponent).join('/');
+    const body = isPlaylist
+      ? rewritePlaylist(text, base, host, folder, subDir)
+      : rewriteMpd(text, base, host, folder);
     return new NextResponse(body, {
       status: 200,
       headers: {

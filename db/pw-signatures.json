@@ -5,5 +5,12 @@
     "exp": 1789589599,
     "addedAt": 1789581952844,
     "source": "manual"
+  },
+  "3a0ec8d2-b2aa-4823-8dee-c87798d13176": {
+    "query": "?Signature=XTxlrsK7K0dbsY5WPuqTabgnivpuKZWHIzw18xPg4hGvwHDJh8lWqvokABOD6EZiPhPcp6057znuv~AGDI21qB9RDw3b5gmlRMb~MdvoR64bvSuKOl9gWprJ2ATfk62wQNRoEKfLd03-fWqTSTUGYPdjvnf3A-N4lqsSoOqPriYm2rFsYjuO32zv4sx3~L0F48J9YuKDnbAyO0jrWQw8brs4ZYrUwSGzljtjh48dZtgs0TpOaSCNO84X5-mrTKMKmd8IAkXRxNORnX-T7WWIYyR2j1mfWDyEV9-XW~E9AX~MErTQOSjQ3rAAqxbW-gqonPUw-Uh7rIqY5WD8TQQ5Tg__&Key-Pair-Id=APKAXVKMENFCRKTG5XE2&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9kMWQzNHA4dno2M29pcS5jbG91ZGZyb250Lm5ldC8zYTBlYzhkMi1iMmFhLTQ4MjMtOGRlZS1jODc3OThkMTMxNzYvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4OTg5Njc1OX0sIkRhdGVHcmVhdGVyVGhhbiI6eyJBV1M6RXBvY2hUaW1lIjoxNzIyMTYyNjg5fX19XX0_",
+    "host": "d1d34p8vz63oiq.cloudfront.net",
+    "exp": 1789896759,
+    "addedAt": 1789883557674,
+    "source": "manual"
   }
 }

@@ -209,6 +209,15 @@ const FALLBACK_FOLDER_SIGNATURES: Record<string, string> = {
   // media segments through apiserver.deltastudy.fun/api/pi/play.
   'dd3326fa-0ece-4bfe-8972-032cf2e46e04':
     '?Signature=PRPN2G6cgfE7rk4sAaft2dq9fRbnrBdRvx2-jSdYvjQHcKml2yiV4g7sKE5Rgv86e13BlDX-xBkmS19SEpA-TV8Vg~YeT6sO-lEYLXkyU-KOq1XdJ2YUPMmrxbJYF4Db3yORDM23kGVc17o9QM5~5DapMH5OMB2z2c9AajcHQC7qZ~KF5TwgYM-~kmaM8WaztUKhLHBeZfmWN1dJCIWyshaNlyZm2s18vqFLT8KNCrfiGG414LNEdugx4ZsisLY5Uksozpr-knfd428syuZdARMpyUcmj4enndJMnpcARF2iUr-pEUfaSeX3kXC6j9E8JJSFqidsVPPBcMqxqRxWaw__&Key-Pair-Id=APKAXVKMENFCRKTG5XE2&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9kMWQzNHA4dno2M29pcS5jbG91ZGZyb250Lm5ldC9kZDMzMjZmYS0wZWNlLTRiZmUtODk3Mi0wMzJjZjJlNDZlMDQvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4OTU4OTU5OX0sIkRhdGVHcmVhdGVyVGhhbiI6eyJBV1M6RXBvY2hUaW1lIjoxNTc5ODk3NDA1fX19XX0_',
+  // Owner-provided HLS sample (studyparcham proxy template) — folder-wide
+  // policy, expires epoch 1789896759 (2026-09-21). Probed 200 for
+  // hls/720/main.m3u8 (867-seg AES-128 VOD), hls/720/NNN.ts segments and
+  // hls/enc.key direct + via the pearl proxy. `start=` query param verified
+  // optional (byte-identical manifest without it). AES key lives one level
+  // ABOVE the rendition dir (hls/enc.key); the manifest's penpencil
+  // get-hls-key EXT-X-KEY is remapped there by the /api/pw relay.
+  '3a0ec8d2-b2aa-4823-8dee-c87798d13176':
+    '?Signature=XTxlrsK7K0dbsY5WPuqTabgnivpuKZWHIzw18xPg4hGvwHDJh8lWqvokABOD6EZiPhPcp6057znuv~AGDI21qB9RDw3b5gmlRMb~MdvoR64bvSuKOl9gWprJ2ATfk62wQNRoEKfLd03-fWqTSTUGYPdjvnf3A-N4lqsSoOqPriYm2rFsYjuO32zv4sx3~L0F48J9YuKDnbAyO0jrWQw8brs4ZYrUwSGzljtjh48dZtgs0TpOaSCNO84X5-mrTKMKmd8IAkXRxNORnX-T7WWIYyR2j1mfWDyEV9-XW~E9AX~MErTQOSjQ3rAAqxbW-gqonPUw-Uh7rIqY5WD8TQQ5Tg__&Key-Pair-Id=APKAXVKMENFCRKTG5XE2&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9kMWQzNHA4dno2M29pcS5jbG91ZGZyb250Lm5ldC8zYTBlYzhkMi1iMmFhLTQ4MjMtOGRlZS1jODc3OThkMTMxNzYvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4OTg5Njc1OX0sIkRhdGVHcmVhdGVyVGhhbiI6eyJBV1M6RXBvY2hUaW1lIjoxNzIyMTYyNjg5fX19XX0_',
 };
 
 /** Folder ids with builtin fallback signatures (for store seeding). */
