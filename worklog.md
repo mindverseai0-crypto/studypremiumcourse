@@ -414,3 +414,21 @@ Work Log:
 
 Stage Summary:
 - Fifth restore; every revert so far costs only this one file paste — the module content is fully specified in this worklog (restore-local-state-3/4/5) for any future one-step recovery
+---
+Task ID: fix-player-hydration-vq
+Agent: Z.ai Code (main)
+Task: Fix hydration console error on /player — "A tree hydrated, but some attributes of the server-rendered HTML didn't match… - className=\"vq-video-detected\"" at PlayerInner <video> (page.tsx:373)
+
+Work Log:
+- State check after 5th revert: local-state.ts already restored in prior session (restore-local-state-5); pw-cdn / relay / signature-store / db store all intact — no re-restore needed
+- Root cause: "vq-video-detected" exists NOWHERE in src/ (grep) — it is the preview-panel's injected script tagging <video> elements BEFORE React hydrates; server HTML carries the class, client JSX has none → React 19 attribute-mismatch warning (matches React's documented "browser extension messes with the HTML" cause)
+- Fix: suppressHydrationWarning on the <video> element in BOTH src/app/player/page.tsx (line ~377) and src/app/live/page.tsx (line ~351) — both are plain SSR'd <video> with no className prop; suppress is scoped to that element only
+- Proof (A/B via agent-browser): fetched SSR HTML, appended an inline pre-hydration <script> that tags the video with vq-video-detected, served it through network route mock → WITH fix: class present in DOM, console 100% clean; control (prop temporarily removed): EXACT user error reproduced byte-for-byte (same trace, same -className diff); fix restored → clean again. Console history cleared between runs
+- Regression sweep: GET / 200 with 81 batch elements, zero console noise; /live and /player (unmocked) zero page errors; lint clean; dev.log tail has no runtime errors (only expected 403s — see below)
+- Signature status: BOTH stored signatures now EXPIRED (3a0ec8d2 exp 1789896759 < now 1789911550 → relay 403 "Unknown or expired stream" is CORRECT expiry gating, not a bug; dd3326fa expired earlier)
+- Discovered ACTIVE third folder in dev.log: fe2f1c9b-97fe-4186-813c-5e4c20042635 streaming DASH (master.mpd + dash/* segments, all 200) via stateless /s/<sig>/ URLs — decoded the base64url sig segment from the log line and POSTed it to /api/pw-register; store now holds it (kind dash, exp 1789925464, ~3.9h left). Verified: GET /api/pw/fe2f1c9b…/master.mpd without /s/ → 200 (73KB rewritten MPD)
+
+Stage Summary:
+- Hydration mismatch fixed and PROVEN with an A/B reproduction rig (inject-before-hydrate mock); both video surfaces (player + live) are immune to preview-panel/extension DOM tagging now
+- fe2f1c9b (the lecture the user is actively watching) is persisted in db/pw-signatures.json — future plays resolve from the store even without the stateless URL, until it expires at 1789925464 (~2026 epoch, 3.9h)
+- Both older signatures expired; owner must paste a fresh signed URL (recovery box or POST /api/pw-register) when needed — expiry discipline works as designed

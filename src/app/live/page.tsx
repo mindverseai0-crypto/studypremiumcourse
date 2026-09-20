@@ -344,7 +344,11 @@ function LiveInner() {
             style={{ width: '100%', height: '100%', border: 0 }}
           />
         ) : (
+          // Preview-panel/extension scripts can tag <video> (e.g. class
+          // "vq-video-detected") before React hydrates — suppress the
+          // harmless attribute mismatch this causes.
           <video
+            suppressHydrationWarning
             ref={videoRef}
             playsInline
             onPlay={() => { setPlaying(true); scheduleHide(); }}
