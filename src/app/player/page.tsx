@@ -91,6 +91,9 @@ function PlayerInner() {
   const videoId = params.get('videoId') || params.get('vId') || '';
   const batchId = params.get('batchId') || '';
   const subjectId = params.get('subjectId') || params.get('SubjectId') || '';
+  // schedule item id (pw_sch_cntnt node id) — the correct upstream id for
+  // slides/notes/attachments, more reliable than the lecture/video id
+  const schId = params.get('schId') || '';
   const title = params.get('title') || 'PW Lecture';
   const vUrl = params.get('vUrl') || '';
   // real PW video id (videoDetails._id) when it differs from the schedule id
@@ -158,6 +161,11 @@ function PlayerInner() {
   const [extrasLoading, setExtrasLoading] = useState(false);
   const [extrasLoaded, setExtrasLoaded] = useState(false);
   const [viewingDoc, setViewingDoc] = useState<DocItem | null>(null);
+  const extrasStarted = useRef(false);
+  // PiP support can only be detected on the client — decide AFTER hydration,
+  // otherwise the kebab sheet renders a different tree on server vs client
+  // (recoverable hydration error on /player).
+  const [pipAvailable, setPipAvailable] = useState(false);
 
   // ------------------------------------------------------------------
   // Identity of the discussion thread: stable per lecture.
@@ -184,6 +192,9 @@ function PlayerInner() {
       setHlsLevels([]);
       setDashList([]);
       setQualitySel('auto');
+      setExtras({ slides: [], notes: [], attachments: [] });
+      setExtrasLoaded(false);
+      extrasStarted.current = false;
       xpGiven.current = false;
       if (vUrl && !/\.cloudfront\.net/i.test(vUrl)) {
         // direct URL (mp4 / m3u8 / mpd / youtube) — non-CloudFront hosts only;
@@ -385,6 +396,11 @@ function PlayerInner() {
     return () => document.removeEventListener('fullscreenchange', onFs);
   }, []);
 
+  // Picture-in-picture feature detection must run post-hydration (client only).
+  useEffect(() => {
+    setPipAvailable(!isSrEmbed && document.pictureInPictureEnabled);
+  }, [isSrEmbed]);
+
   const scheduleHide = useCallback(() => {
     if (hideTimeout.current) clearTimeout(hideTimeout.current);
     setControlsHidden(false);
@@ -396,6 +412,13 @@ function PlayerInner() {
       }
     }, 3000);
   }, [settingsSheet, menuOpen]);
+
+  // Explicit affordance to bring the controls/options back after auto-hide.
+  const showControls = useCallback(() => {
+    setControlsHidden(false);
+    setCenterVisible(true);
+    scheduleHide();
+  }, [scheduleHide]);
 
   const togglePlay = useCallback(() => {
     const v = videoRef.current;
@@ -597,6 +620,45 @@ function PlayerInner() {
     }
   }, [threadKey]);
 
+  // ------------------------------------------------------------------
+  // Docs (slides / notes / attachments) — fetched once per lecture.
+  // scheduleId priority: schId (pw_sch_cntnt node) → videoId → realVideoId.
+  // ------------------------------------------------------------------
+  const loadExtras = useCallback(() => {
+    if (extrasStarted.current) return;
+    extrasStarted.current = true;
+    setExtrasLoading(true);
+    const q = new URLSearchParams({
+      batchId,
+      scheduleId: schId || videoId || realVideoId,
+      subjectId,
+      videoId: realVideoId,
+    });
+    fetch(`/api/player/extras?${q.toString()}`)
+      .then((r) => r.json())
+      .then((body: { success?: boolean; slides?: DocItem[]; notes?: DocItem[]; attachments?: DocItem[] }) => {
+        setExtras({
+          slides: Array.isArray(body.slides) ? body.slides : [],
+          notes: Array.isArray(body.notes) ? body.notes : [],
+          attachments: Array.isArray(body.attachments) ? body.attachments : [],
+        });
+        setExtrasLoaded(true);
+      })
+      .catch(() => {
+        extrasStarted.current = false; // allow a retry on the next open
+        setExtrasLoaded(true);
+      })
+      .finally(() => setExtrasLoading(false));
+  }, [batchId, schId, videoId, realVideoId, subjectId]);
+
+  // Prefetch docs for EVERY lecture so Slides/Notes/Attachments tabs are
+  // populated (with counts) without requiring the user to open them first.
+  useEffect(() => {
+    if (isSrEmbed || kind === 'youtube') return;
+    if (!batchId || !(schId || videoId || realVideoId)) return;
+    loadExtras();
+  }, [loadExtras, batchId, schId, videoId, realVideoId, isSrEmbed, kind]);
+
   const openPanel = useCallback((tab: PanelTab) => {
     setPanel(tab);
     setViewingDoc(null);
@@ -607,24 +669,9 @@ function PlayerInner() {
       setItems([]);
       void loadItems(tab === 'doubts' ? 'doubt' : 'comment');
     } else if (tab === 'slides' || tab === 'notes' || tab === 'attachments') {
-      if (!extrasLoaded && !extrasLoading) {
-        setExtrasLoading(true);
-        const q = new URLSearchParams({ batchId, scheduleId: videoId || realVideoId, subjectId, videoId: realVideoId });
-        fetch(`/api/player/extras?${q.toString()}`)
-          .then((r) => r.json())
-          .then((body: { success?: boolean; slides?: DocItem[]; notes?: DocItem[]; attachments?: DocItem[] }) => {
-            setExtras({
-              slides: Array.isArray(body.slides) ? body.slides : [],
-              notes: Array.isArray(body.notes) ? body.notes : [],
-              attachments: Array.isArray(body.attachments) ? body.attachments : [],
-            });
-            setExtrasLoaded(true);
-          })
-          .catch(() => setExtrasLoaded(true))
-          .finally(() => setExtrasLoading(false));
-      }
+      if (!extrasLoaded) loadExtras();
     }
-  }, [loadItems, extrasLoaded, extrasLoading, batchId, videoId, realVideoId, subjectId]);
+  }, [loadItems, extrasLoaded, loadExtras]);
 
   const closePanel = useCallback(() => {
     setPanel('');
@@ -722,7 +769,6 @@ function PlayerInner() {
   const isPwStream = kind === 'dash' || kind === 'hls';
   const ytId = kind === 'youtube' ? youtubeId(src) : '';
   const panelsEnabled = !isSrEmbed && kind !== 'youtube';
-  const pipAvailable = !isSrEmbed && typeof document !== 'undefined' && document.pictureInPictureEnabled;
 
   const qualityOptions: Array<{ key: 'auto' | number; label: string }> = useMemo(() => {
     if (kind === 'hls') return [{ key: 'auto', label: 'Auto' }, ...hlsLevels.map((l) => ({ key: l.index as 'auto' | number, label: l.label }))];
@@ -906,9 +952,15 @@ function PlayerInner() {
                 <div className="panel-head">
                   <button className={`panel-tab ${panel === 'comments' ? 'active' : ''}`} onClick={() => openPanel('comments')}>Comments</button>
                   <button className={`panel-tab ${panel === 'doubts' ? 'active' : ''}`} onClick={() => openPanel('doubts')}>Doubts</button>
-                  <button className={`panel-tab ${panel === 'slides' ? 'active' : ''}`} onClick={() => openPanel('slides')}>Slides</button>
-                  <button className={`panel-tab ${panel === 'notes' ? 'active' : ''}`} onClick={() => openPanel('notes')}>Notes</button>
-                  <button className={`panel-tab ${panel === 'attachments' ? 'active' : ''}`} onClick={() => openPanel('attachments')}>Attachments</button>
+                  <button className={`panel-tab ${panel === 'slides' ? 'active' : ''}`} onClick={() => openPanel('slides')}>
+                    Slides{extras.slides.length > 0 ? <span className="tab-count">{extras.slides.length}</span> : null}
+                  </button>
+                  <button className={`panel-tab ${panel === 'notes' ? 'active' : ''}`} onClick={() => openPanel('notes')}>
+                    Notes{extras.notes.length > 0 ? <span className="tab-count">{extras.notes.length}</span> : null}
+                  </button>
+                  <button className={`panel-tab ${panel === 'attachments' ? 'active' : ''}`} onClick={() => openPanel('attachments')}>
+                    Attach{extras.attachments.length > 0 ? <span className="tab-count">{extras.attachments.length}</span> : null}
+                  </button>
                   <button className="panel-close" aria-label="Close panel" onClick={closePanel}>
                     <i className="fas fa-times"></i>
                   </button>
@@ -1061,6 +1113,20 @@ function PlayerInner() {
               </>
             )}
           </aside>
+        ) : null}
+
+        {/* -------- restore affordance: bring the player controls and
+             the options (comments, doubts, slides, notes…) back after
+             they auto-hide during playback -------- */}
+        {controlsHidden && !error && !isSrEmbed ? (
+          <button
+            className="controls-restore"
+            aria-label="Show player controls and options"
+            title="Show controls"
+            onClick={(e) => { e.stopPropagation(); showControls(); }}
+          >
+            <i className="fas fa-sliders"></i>
+          </button>
         ) : null}
 
         <div className={`controls-overlay ${controlsHidden ? 'hidden' : ''}`}>

@@ -22,9 +22,8 @@ import {
   TestItemPublic,
 } from '@/lib/api-client';
 import { addXP, useEnrolledBatches, useXP, useWatchedVideos } from '@/lib/local-state';
-import SrBrowser from './sr-browser';
 
-type ViewId = 'home-view' | 'study-view' | 'all-classes-view' | 'chapters-view' | 'content-view' | 'all-tests-view' | 'sr-view';
+type ViewId = 'home-view' | 'study-view' | 'all-classes-view' | 'chapters-view' | 'content-view' | 'all-tests-view';
 
 interface SubjectRef { id: string; internalId: string; name: string; masterId: string; batchSubjectId: string }
 interface TopicRef { id: string; name: string }
@@ -565,14 +564,11 @@ export default function StudyBisonApp() {
           <a onClick={() => nav('home-view')} className={view === 'home-view' ? 'active' : ''} id="link-courses" role="button" tabIndex={0}>
             <i className="fas fa-compass"></i> All Courses
           </a>
-          <a onClick={() => nav('sr-view')} className={view === 'sr-view' ? 'active' : ''} id="link-ratna" role="button" tabIndex={0}>
-            <i className="fas fa-play-circle"></i> Study Ratna
-          </a>
         </div>
-        <div id="utk-credit" style={{ marginTop: 'auto', padding: 24, textAlign: 'center', borderTop: '1px solid var(--sb-border-color)', background: 'rgba(0,0,0,0.02)' }}>
+        <div id="dev-credit" style={{ marginTop: 'auto', padding: 24, textAlign: 'center', borderTop: '1px solid var(--sb-border-color)', background: 'rgba(0,0,0,0.02)' }}>
           <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--sb-text-muted)', letterSpacing: '0.5px' }}>
             <i className="fas fa-code" style={{ color: 'var(--sb-text-dark)' }}></i> Developed by <br />
-            <span style={{ color: 'var(--sb-primary)', fontWeight: 800, fontSize: '1.2rem', textTransform: 'uppercase', display: 'inline-block', marginTop: 5 }}>Utkarsh</span>
+            <span style={{ color: 'var(--sb-primary)', fontWeight: 800, fontSize: '1.2rem', textTransform: 'uppercase', display: 'inline-block', marginTop: 5 }}>Nishant</span>
           </div>
         </div>
       </div>
@@ -596,11 +592,6 @@ export default function StudyBisonApp() {
       </header>
 
       <div id="app-container">
-        {/* ================= STUDY RATNA VIEW ================= */}
-        <div id="sr-view" className={`view-section ${view === 'sr-view' ? 'active-view' : ''}`}>
-          <SrBrowser />
-        </div>
-
         {/* ================= HOME VIEW ================= */}
         <div id="home-view" className={`view-section ${view === 'home-view' ? 'active-view' : ''}`}>
           <div className="search-container">

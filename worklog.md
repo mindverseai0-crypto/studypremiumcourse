@@ -468,3 +468,23 @@ Stage Summary:
 - Player now matches the uploaded design: same control order/iconography, speed chip, buffered violet bar; all 7 requested features (Comments, Doubts, Slides, Notes, Attachments, Settings, Fullscreen) implemented with DB-backed comments/doubts and real PW PDF extraction
 - New backend surface: /api/player/interactions (GET/POST), /api/player/extras (GET) + PlayerComment table — survive restarts
 - E2E fixture /public/e2ehls (2.9MB, eslint-ignored) kept for future playback testing; real-lecture DRM path unchanged and proven in production use
+---
+Task ID: player-round2
+Agent: Z.ai Code (main)
+Task: "Replace 'Developed by Utkarsh' with 'Developed by Nishant'; remove the Study Ratna sidebar section completely; add an option to go back to the video player controls/options (comment and more); add Slides to all lectures and Notes/Attachments to all lectures properly"
+
+Work Log:
+- SIXTH sandbox revert hit mid-task: src/lib/local-state.ts wiped again (consumers intact, GET / 500). Rebuilt from the restore-local-state-3/4/5 spec (useSyncExternalStore + raw-string cachedList + EMPTY_LIST SSR snapshot + sb-*-changed/storage fan-out + idempotent writes + self-contained WAAPI XP toast); GET / and /player back to 200; lint clean. Also scanned git history — the module was never committed, so the worklog spec remains the only recovery source
+- studybison-app.tsx: sidebar credit now "Developed by / NISHANT" (id utk-credit → dev-credit); removed the Study Ratna sidebar link (#link-ratna), the #sr-view section, SrBrowser import and the 'sr-view' ViewId entry — sidebar is now Study Dashboard | All Courses only. sr-api.ts//api/sr/sr-browser.tsx left on disk (unreferenced by the UI; player's srUrl fallback branch kept harmless for old links)
+- Player "back to controls": new floating .controls-restore button (44px, top-left, z-20) rendered whenever controls auto-hide during playback (controlsHidden && !error && !isSrEmbed); click → showControls() (controlsHidden=false, center pill back, re-arm 3s auto-hide). CSS added to player.css
+- Slides/Notes/Attachments for ALL lectures: player now reads the schId param (pw_sch_cntnt node id — the correct upstream ContentId) and loadExtras() uses scheduleId = schId || videoId || realVideoId; extras are PREFETCHED once per lecture (extrasStarted ref guard, reset on lecture change) so tabs are populated with count badges (Slides n / Notes n / Attach n) without the user opening them; /api/player/extras route refactored to a candidates loop (scheduleId → videoId, de-duped) — keeps trying until any array is non-empty, degrades to 200+warning otherwise
+- BONUS FIX (found via Next dev-tools "1 Issue" badge, invisible to console/pageerror): recoverable hydration error on /player — kebab-sheet PiP row used `typeof document !== 'undefined' && document.pictureInPictureEnabled` during render (server/client branch → server HTML lacked the row). Replaced with pipAvailable state set in a post-hydration effect. Dev indicator now shows NO issues on /player
+- E2E (agent-browser + /public/e2ehls fixture + network-route mock for extras): prefetch request fired automatically with scheduleId=sch-e2e; tabs show Comments | Doubts | Slides¹ | Notes¹ | Attach¹ with mocked counts; Notes tab lists the doc; restore button appears after 4.5s playback with controls hidden, click returns ALL controls (play/comments/settings/fullscreen) and unmounts itself; comment posted via composer renders; desktop drawer + 375px bottom-sheet (full-width, 72% height) verified, restore button reachable on mobile; zero console/page errors
+- Live-session safety: user was actively streaming folder ab848e0d-c67c-4998-99fb-c9d07586c24f (DASH, stateless /s/ URLs, segments 200) while I edited — playback unaffected; decoded the /s/ blob, reconstructed the signed URL and POSTed to /api/pw-register (store now holds 4 folders, new entry exp 1789943904 ≈ 7h); verified GET /api/pw/ab848e0d…/master.mpd without /s/ → 200 (78KB rewritten MPD) via store resolution
+
+Stage Summary:
+- Sidebar: "Developed by NISHANT" + Study Ratna section fully removed
+- Player: always-visible escape hatch back to controls/options after auto-hide (mobile-friendly 44px target)
+- Slides/Notes/Attachments now wire the correct schedule id (schId) for every lecture, prefetch on load, and the API tries both scheduleId and videoId — best-effort population for all lectures with graceful empty states where upstream genuinely has none
+- /player is hydration-clean per the Next dev-tools issue counter (PiP row SSR branch fixed)
+- local-state.ts restored for the 6th time (spec-driven one-paste, ~2min); consider vendoring this file into the task brief itself next session

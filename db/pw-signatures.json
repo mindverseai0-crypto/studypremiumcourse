@@ -19,5 +19,12 @@
     "exp": 1789925464,
     "addedAt": 1789911936238,
     "source": "manual"
+  },
+  "ab848e0d-c67c-4998-99fb-c9d07586c24f": {
+    "query": "?start=1780057800&Signature=B0hBQYW40PcKupgCt0w8uV8ZJU3vcHHR8i7ENvf2efL2-b1gXXCF63XrR3%7Em6g%7EOPf5vYcbeA382vZM95%7E1kyXjVpysAUB4RzK4yuJJ5PIHi-TBE2gcfOkSbsP6Mz3wk5HBTLsHcrx2X5rFfdOpUwEePUqqLsHQVrGnCrX3RErjVBMHWLz-6g9zti4iXC40eqeItN5nceBPiy8i7%7EjXzEOXiT4NmZ2SNk82b66hqV2r0m8dwwYcoLkkAhPphxLPH4mOh-bvdSYouk42LTSw29eGYv%7EGP8SbmnsioruN5HB1-0ZkwzAJtYK-ZTSWCNqh%7EMeLQ165YIVXdb0ivtljbKw__&Key-Pair-Id=APKAXVKMENFCRKTG5XE2&Policy=eyJTdGF0ZW1lbnQiOlt7IlJlc291cmNlIjoiaHR0cHM6Ly9kMWQzNHA4dno2M29pcS5jbG91ZGZyb250Lm5ldC9hYjg0OGUwZC1jNjdjLTQ5OTgtOTlmYi1jOWQwNzU4NmMyNGYvKiIsIkNvbmRpdGlvbiI6eyJEYXRlTGVzc1RoYW4iOnsiQVdTOkVwb2NoVGltZSI6MTc4OTk0MzkwNH0sIkRhdGVHcmVhdGVyVGhhbiI6eyJBV1M6RXBvY2hUaW1lIjo4Mzc3Njk1NDJ9fX1dfQ__",
+    "host": "d1d34p8vz63oiq.cloudfront.net",
+    "exp": 1789943904,
+    "addedAt": 1789929617214,
+    "source": "manual"
   }
 }

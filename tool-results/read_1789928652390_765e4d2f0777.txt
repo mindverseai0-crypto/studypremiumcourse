@@ -1,0 +1,1294 @@
+     1→'use client';
+     2→
+     3→// Study Bison video player — PW-app style.
+     4→// Streams: DASH (ClearKey via shaka), HLS (hls.js), YouTube embeds, mp4.
+     5→// UI: minimal top bar (back + kebab), time + speed chip, buffered seek bar
+     6→// with scrub tooltip, control row (play · ±10s · volume ‖ comments · doubts ·
+     7→// slides · notes · settings · fullscreen) and a side panel / bottom sheet
+     8→// with Comments, Doubts, Slides, Notes and Attachments tabs.
+     9→// Backend: /api/player/interactions (comments+doubts, one-level replies) and
+    10→// /api/player/extras (slides/notes/attachments from the lecture schedule).
+    11→import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+    12→import { useSearchParams } from 'next/navigation';
+    13→import type HlsType from 'hls.js';
+    14→import type ShakaNamespace from 'shaka-player';
+    15→import './player.css';
+    16→import { api } from '@/lib/api-client';
+    17→import { addXP } from '@/lib/local-state';
+    18→import { isHlsUrl, isMpdUrl, youtubeId } from '@/lib/video-utils';
+    19→
+    20→const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+    21→
+    22→type PlayerKind = '' | 'dash' | 'hls' | 'youtube' | 'mp4';
+    23→type PanelTab = '' | 'comments' | 'doubts' | 'slides' | 'notes' | 'attachments';
+    24→type SheetView = '' | 'root' | 'speed' | 'quality';
+    25→
+    26→interface ReplyItem {
+    27→  id: string;
+    28→  author: string;
+    29→  text: string;
+    30→  createdAt: string;
+    31→  parentId: string | null;
+    32→}
+    33→interface TopItem extends ReplyItem {
+    34→  replies: ReplyItem[];
+    35→}
+    36→interface DocItem {
+    37→  name: string;
+    38→  url: string;
+    39→}
+    40→
+    41→function formatTime(t: number): string {
+    42→  if (!isFinite(t) || t < 0) return '00:00';
+    43→  const s = Math.floor(t % 60);
+    44→  const m = Math.floor((t / 60) % 60);
+    45→  const h = Math.floor(t / 3600);
+    46→  const mm = String(m).padStart(2, '0');
+    47→  const ss = String(s).padStart(2, '0');
+    48→  return h > 0 ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+    49→}
+    50→
+    51→function timeAgo(iso: string): string {
+    52→  const then = new Date(iso).getTime();
+    53→  if (!isFinite(then)) return '';
+    54→  const secs = Math.max(0, Math.floor((Date.now() - then) / 1000));
+    55→  if (secs < 60) return 'just now';
+    56→  const mins = Math.floor(secs / 60);
+    57→  if (mins < 60) return `${mins}m ago`;
+    58→  const hrs = Math.floor(mins / 60);
+    59→  if (hrs < 24) return `${hrs}h ago`;
+    60→  const days = Math.floor(hrs / 24);
+    61→  if (days < 30) return `${days}d ago`;
+    62→  return new Date(then).toLocaleDateString();
+    63→}
+    64→
+    65→/* Doubt (Q+A bubbles) icon — FA free has no Q&A glyph. */
+    66→function DoubtIcon(): React.ReactElement {
+    67→  return (
+    68→    <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    69→      <rect x="1.8" y="3" width="13" height="10.5" rx="2.6" />
+    70→      <text x="8.3" y="10.9" fontSize="7.4" fontWeight="800" fill="currentColor" stroke="none" textAnchor="middle" fontFamily="Inter, sans-serif">Q</text>
+    71→      <path d="M4.5 13.5v3.2l3.4-3.2" />
+    72→      <rect x="12.6" y="11.2" width="9.6" height="8" rx="2.1" fill="#000" />
+    73→      <rect x="12.6" y="11.2" width="9.6" height="8" rx="2.1" />
+    74→      <text x="17.4" y="17" fontSize="5.6" fontWeight="800" fill="currentColor" stroke="none" textAnchor="middle" fontFamily="Inter, sans-serif">A</text>
+    75→    </svg>
+    76→  );
+    77→}
+    78→
+    79→/* Slides icon — framed play (lecture deck). */
+    80→function SlidesIcon(): React.ReactElement {
+    81→  return (
+    82→    <svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    83→      <rect x="2.4" y="4.2" width="19.2" height="15.6" rx="2.6" />
+    84→      <path d="M10.2 9.1v5.8l5.2-2.9z" fill="currentColor" stroke="none" />
+    85→    </svg>
+    86→  );
+    87→}
+    88→
+    89→function PlayerInner() {
+    90→  const params = useSearchParams();
+    91→  const videoId = params.get('videoId') || params.get('vId') || '';
+    92→  const batchId = params.get('batchId') || '';
+    93→  const subjectId = params.get('subjectId') || params.get('SubjectId') || '';
+    94→  const title = params.get('title') || 'PW Lecture';
+    95→  const vUrl = params.get('vUrl') || '';
+    96→  // real PW video id (videoDetails._id) when it differs from the schedule id
+    97→  const realVideoId = params.get('lectureVideoId') || '';
+    98→  // Study Ratna embed — render their play.php player in an iframe
+    99→  const srUrl = params.get('srUrl') || '';
+   100→  const isSrEmbed = Boolean(srUrl);
+   101→
+   102→  const videoRef = useRef<HTMLVideoElement>(null);
+   103→  const wrapperRef = useRef<HTMLDivElement>(null);
+   104→  const listRef = useRef<HTMLDivElement>(null);
+   105→  const hideTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+   106→  const flashTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+   107→  const xpGiven = useRef(false);
+   108→  const hlsRef = useRef<HlsType | null>(null);
+   109→  const shakaRef = useRef<ShakaNamespace.Player | null>(null);
+   110→  const scrubbing = useRef(false);
+   111→
+   112→  const [kind, setKind] = useState<PlayerKind>('');
+   113→  const [src, setSrc] = useState('');
+   114→  const [clearKeys, setClearKeys] = useState<Record<string, string> | null>(null);
+   115→  const [poster, setPoster] = useState('');
+   116→  const [status, setStatus] = useState('Processing Stream...');
+   117→  const [statusSub, setStatusSub] = useState('Preparing Secure Stream');
+   118→  const [loading, setLoading] = useState(true);
+   119→  const [error, setError] = useState('');
+   120→  const [playing, setPlaying] = useState(false);
+   121→  const [muted, setMuted] = useState(false);
+   122→  const [currentTime, setCurrentTime] = useState(0);
+   123→  const [duration, setDuration] = useState(0);
+   124→  const [buffered, setBuffered] = useState(0);
+   125→  const [controlsHidden, setControlsHidden] = useState(false);
+   126→  const [centerVisible, setCenterVisible] = useState(true);
+   127→  const [menuOpen, setMenuOpen] = useState(false);
+   128→  const [settingsSheet, setSettingsSheet] = useState<SheetView>('');
+   129→  const [speedIdx, setSpeedIdx] = useState(2);
+   130→  const [copied, setCopied] = useState(false);
+   131→  const [sigInput, setSigInput] = useState('');
+   132→  const [sigBusy, setSigBusy] = useState(false);
+   133→  const [sigMsg, setSigMsg] = useState('');
+   134→
+   135→  // player extras
+   136→  const [volume, setVolume] = useState(100);
+   137→  const [loop, setLoop] = useState(false);
+   138→  const [isFs, setIsFs] = useState(false);
+   139→  const [seekFlash, setSeekFlash] = useState('');
+   140→  const [hoverFrac, setHoverFrac] = useState<number | null>(null);
+   141→  const [scrubFrac, setScrubFrac] = useState<number | null>(null);
+   142→  const [hlsLevels, setHlsLevels] = useState<Array<{ index: number; label: string }>>([]);
+   143→  const [dashList, setDashList] = useState<Array<{ id: number; height: number }>>([]);
+   144→  const [qualitySel, setQualitySel] = useState<'auto' | number>('auto');
+   145→
+   146→  // side panel
+   147→  const [panel, setPanel] = useState<PanelTab>('');
+   148→  const [items, setItems] = useState<TopItem[]>([]);
+   149→  const [listLoading, setListLoading] = useState(false);
+   150→  const [posting, setPosting] = useState(false);
+   151→  const [draft, setDraft] = useState('');
+   152→  const [submitErr, setSubmitErr] = useState('');
+   153→  const [replyTo, setReplyTo] = useState<{ id: string; author: string } | null>(null);
+   154→  const [displayName, setDisplayName] = useState('');
+   155→  const [nameEditing, setNameEditing] = useState(false);
+   156→  const [nameDraft, setNameDraft] = useState('');
+   157→  const [extras, setExtras] = useState<{ slides: DocItem[]; notes: DocItem[]; attachments: DocItem[] }>({ slides: [], notes: [], attachments: [] });
+   158→  const [extrasLoading, setExtrasLoading] = useState(false);
+   159→  const [extrasLoaded, setExtrasLoaded] = useState(false);
+   160→  const [viewingDoc, setViewingDoc] = useState<DocItem | null>(null);
+   161→
+   162→  // ------------------------------------------------------------------
+   163→  // Identity of the discussion thread: stable per lecture.
+   164→  // ------------------------------------------------------------------
+   165→  const threadKey = useMemo(() => {
+   166→    if (videoId) return videoId;
+   167→    if (realVideoId) return realVideoId;
+   168→    if (vUrl) return `url:${vUrl.split('?')[0]}`;
+   169→    return 'player';
+   170→  }, [videoId, realVideoId, vUrl]);
+   171→
+   172→  const panelType = panel === 'doubts' ? 'doubt' : 'comment';
+   173→
+   174→  // ------------------------------------------------------------------
+   175→  // Resolve the playable payload.
+   176→  // ------------------------------------------------------------------
+   177→  useEffect(() => {
+   178→    let cancelled = false;
+   179→    (async () => {
+   180→      setError('');
+   181→      setDuration(0);
+   182→      setCurrentTime(0);
+   183→      setBuffered(0);
+   184→      setHlsLevels([]);
+   185→      setDashList([]);
+   186→      setQualitySel('auto');
+   187→      xpGiven.current = false;
+   188→      if (vUrl && !/\.cloudfront\.net/i.test(vUrl)) {
+   189→        // direct URL (mp4 / m3u8 / mpd / youtube) — non-CloudFront hosts only;
+   190→        // CloudFront folders must be signed server-side via parcham_vid.
+   191→        setSrc(vUrl);
+   192→        if (isMpdUrl(vUrl)) setKind('dash');
+   193→        else if (isHlsUrl(vUrl)) setKind('hls');
+   194→        else if (/youtube\.com|youtu\.be/i.test(vUrl)) setKind('youtube');
+   195→        else setKind('mp4');
+   196→        setStatus('Ready to play');
+   197→        setLoading(false);
+   198→        return;
+   199→      }
+   200→      if (!videoId) {
+   201→        setError('Missing URL Parameters.');
+   202→        setLoading(false);
+   203→        return;
+   204→      }
+   205→      setStatus('Fetching lecture...');
+   206→      setStatusSub('Resolving secure stream');
+   207→      try {
+   208→        const res = await api.videoPayload(videoId, batchId, subjectId, vUrl, realVideoId);
+   209→        if (cancelled) return;
+   210→        if (!res.success || !res.data || !res.data.url) {
+   211→          throw new Error(res.error || 'This lecture is not available right now.');
+   212→        }
+   213→        setKind(res.data.kind || 'mp4');
+   214→        setSrc(res.data.url);
+   215→        setClearKeys(res.data.clearKeys || null);
+   216→        setPoster(res.data.poster || '');
+   217→        setStatus('Ready to play');
+   218→        setLoading(false);
+   219→      } catch (e) {
+   220→        if (!cancelled) {
+   221→          setError(e instanceof Error ? e.message : 'Playback Engine Failed');
+   222→          setLoading(false);
+   223→        }
+   224→      }
+   225→    })();
+   226→    return () => {
+   227→      cancelled = true;
+   228→    };
+   229→  }, [videoId, batchId, subjectId, vUrl, realVideoId]);
+   230→
+   231→  // ------------------------------------------------------------------
+   232→  // Attach the source by kind.
+   233→  // ------------------------------------------------------------------
+   234→  useEffect(() => {
+   235→    const v = videoRef.current;
+   236→    if (!v || !src) return;
+   237→
+   238→    if (kind === 'youtube') return; // rendered as an iframe below
+   239→
+   240→    if (kind === 'mp4') {
+   241→      v.src = src;
+   242→      return () => {
+   243→        v.removeAttribute('src');
+   244→        v.load();
+   245→      };
+   246→    }
+   247→
+   248→    let destroyed = false;
+   249→    (async () => {
+   250→      if (kind === 'dash') {
+   251→        setStatus('Loading DASH player...');
+   252→        const shaka = (await import('shaka-player')).default;
+   253→        if (destroyed) return;
+   254→        shaka.polyfill.installAll();
+   255→        if (!shaka.Player.isBrowserSupported()) {
+   256→          setError('Protected video playback is not supported in this browser.');
+   257→          setLoading(false);
+   258→          return;
+   259→        }
+   260→        const player = new shaka.Player(v);
+   261→        shakaRef.current = player;
+   262→        player.configure({
+   263→          abr: { enabled: true },
+   264→          ...(clearKeys && Object.keys(clearKeys).length > 0 ? { drm: { clearKeys } } : {}),
+   265→        });
+   266→        player.addEventListener('error', (evt) => {
+   267→          const detail = (evt as unknown as { detail?: { message?: string } })?.detail;
+   268→          if (detail) {
+   269→            setError(detail.message || 'Unable to decrypt/play this stream.');
+   270→            setLoading(false);
+   271→          }
+   272→        });
+   273→        // quality variants for the settings sheet
+   274→        const refreshTracks = () => {
+   275→          try {
+   276→            const p = shakaRef.current;
+   277→            if (!p) return;
+   278→            const tracks = p.getVariantTracks().filter((t) => t.height);
+   279→            tracks.sort((a, b) => b.height - a.height);
+   280→            const seen = new Set<number>();
+   281→            const list: Array<{ id: number; height: number }> = [];
+   282→            for (const t of tracks) {
+   283→              if (!seen.has(t.height)) {
+   284→                seen.add(t.height);
+   285→                list.push({ id: t.id, height: t.height });
+   286→              }
+   287→            }
+   288→            setDashList(list);
+   289→          } catch {
+   290→            /* ignore */
+   291→          }
+   292→        };
+   293→        player.addEventListener('variantchanged', refreshTracks);
+   294→        player.addEventListener('adaptation', refreshTracks);
+   295→        await player.load(src, 0, 'application/dash+xml');
+   296→        refreshTracks();
+   297→        await v.play().catch(() => undefined);
+   298→      } else if (kind === 'hls') {
+   299→        setStatus('Loading HLS stream...');
+   300→        const Hls = (await import('hls.js')).default;
+   301→        if (destroyed) return;
+   302→        if (Hls.isSupported()) {
+   303→          const hls = new Hls({ enableWorker: true });
+   304→          hlsRef.current = hls;
+   305→          hls.attachMedia(v);
+   306→          hls.on(Hls.Events.MEDIA_ATTACHED, () => hls.loadSource(src));
+   307→          hls.on(Hls.Events.MANIFEST_PARSED, (_e, data) => {
+   308→            const seen = new Set<string>();
+   309→            const levels: Array<{ index: number; label: string }> = [];
+   310→            data.levels.forEach((l, i) => {
+   311→              const h = l.height || 0;
+   312→              // media playlists often carry no RESOLUTION — fall back to bitrate
+   313→              const label = h > 0
+   314→                ? `${h}p`
+   315→                : l.bitrate ? `${Math.round(l.bitrate / 1000)} kbps` : `Level ${i + 1}`;
+   316→              if (!seen.has(label)) {
+   317→                seen.add(label);
+   318→                levels.push({ index: i, label });
+   319→              }
+   320→            });
+   321→            setHlsLevels(levels);
+   322→          });
+   323→          hls.on(Hls.Events.ERROR, (_evt, data) => {
+   324→            if (data.fatal) {
+   325→              setError('Unable to load the stream. Please try again.');
+   326→              setLoading(false);
+   327→            }
+   328→          });
+   329→        } else if (v.canPlayType('application/vnd.apple.mpegurl')) {
+   330→          v.src = src; // Safari native HLS
+   331→        } else {
+   332→          setError('HLS playback is not supported in this browser.');
+   333→          setLoading(false);
+   334→        }
+   335→      }
+   336→    })();
+   337→
+   338→    return () => {
+   339→      destroyed = true;
+   340→      if (hlsRef.current) {
+   341→        hlsRef.current.destroy();
+   342→        hlsRef.current = null;
+   343→      }
+   344→      if (shakaRef.current) {
+   345→        const sp = shakaRef.current;
+   346→        shakaRef.current = null;
+   347→        try {
+   348→          void sp.destroy();
+   349→        } catch {
+   350→          /* ignore */
+   351→        }
+   352→      }
+   353→    };
+   354→  }, [src, kind, clearKeys]);
+   355→
+   356→  // ------------------------------------------------------------------
+   357→  // Volume / loop persistence + application.
+   358→  // ------------------------------------------------------------------
+   359→  useEffect(() => {
+   360→    try {
+   361→      const sv = parseInt(window.localStorage.getItem('pw_volume') || '', 10);
+   362→      if (Number.isFinite(sv) && sv >= 0 && sv <= 100) setVolume(sv);
+   363→      const sn = window.localStorage.getItem('pw_display_name');
+   364→      if (sn) setDisplayName(sn);
+   365→    } catch {
+   366→      /* ignore */
+   367→    }
+   368→  }, []);
+   369→
+   370→  useEffect(() => {
+   371→    const v = videoRef.current;
+   372→    if (v) {
+   373→      v.volume = volume / 100;
+   374→      if (volume > 0 && v.muted) {
+   375→        v.muted = false;
+   376→        setMuted(false);
+   377→      }
+   378→    }
+   379→  }, [volume, src, kind]);
+   380→
+   381→  // Fullscreen icon state.
+   382→  useEffect(() => {
+   383→    const onFs = () => setIsFs(Boolean(document.fullscreenElement));
+   384→    document.addEventListener('fullscreenchange', onFs);
+   385→    return () => document.removeEventListener('fullscreenchange', onFs);
+   386→  }, []);
+   387→
+   388→  const scheduleHide = useCallback(() => {
+   389→    if (hideTimeout.current) clearTimeout(hideTimeout.current);
+   390→    setControlsHidden(false);
+   391→    hideTimeout.current = setTimeout(() => {
+   392→      const v = videoRef.current;
+   393→      if (v && !v.paused && !settingsSheet && !menuOpen) {
+   394→        setControlsHidden(true);
+   395→        setCenterVisible(false);
+   396→      }
+   397→    }, 3000);
+   398→  }, [settingsSheet, menuOpen]);
+   399→
+   400→  const togglePlay = useCallback(() => {
+   401→    const v = videoRef.current;
+   402→    if (!v) return;
+   403→    if (v.paused) v.play().catch(() => undefined);
+   404→    else v.pause();
+   405→  }, []);
+   406→
+   407→  const flash = useCallback((label: string) => {
+   408→    setSeekFlash(label);
+   409→    if (flashTimeout.current) clearTimeout(flashTimeout.current);
+   410→    flashTimeout.current = setTimeout(() => setSeekFlash(''), 700);
+   411→  }, []);
+   412→
+   413→  const seek = useCallback((delta: number) => {
+   414→    const v = videoRef.current;
+   415→    if (!v) return;
+   416→    v.currentTime = Math.max(0, Math.min(v.duration || 0, v.currentTime + delta));
+   417→    flash(delta < 0 ? `−${Math.round(Math.abs(delta))}s` : `+${Math.round(delta)}s`);
+   418→  }, [flash]);
+   419→
+   420→  const seekToFraction = useCallback((frac: number) => {
+   421→    const v = videoRef.current;
+   422→    if (!v || !v.duration) return;
+   423→    v.currentTime = Math.max(0, Math.min(1, frac)) * v.duration;
+   424→  }, []);
+   425→
+   426→  const toggleMute = useCallback(() => {
+   427→    const v = videoRef.current;
+   428→    if (!v) return;
+   429→    v.muted = !v.muted;
+   430→    setMuted(v.muted);
+   431→  }, []);
+   432→
+   433→  const changeVolume = useCallback((n: number) => {
+   434→    setVolume(n);
+   435→    try {
+   436→      window.localStorage.setItem('pw_volume', String(n));
+   437→    } catch {
+   438→      /* ignore */
+   439→    }
+   440→  }, []);
+   441→
+   442→  const toggleFullscreen = useCallback(() => {
+   443→    const el = wrapperRef.current;
+   444→    if (!el) return;
+   445→    if (document.fullscreenElement) document.exitFullscreen().catch(() => undefined);
+   446→    else el.requestFullscreen().catch(() => undefined);
+   447→  }, []);
+   448→
+   449→  const togglePip = useCallback(() => {
+   450→    const v = videoRef.current;
+   451→    if (!v) return;
+   452→    try {
+   453→      if (document.pictureInPictureElement) {
+   454→        void document.exitPictureInPicture();
+   455→      } else if (document.pictureInPictureEnabled && v.requestPictureInPicture) {
+   456→        void v.requestPictureInPicture().catch(() => undefined);
+   457→      }
+   458→    } catch {
+   459→      /* unsupported */
+   460→    }
+   461→    setMenuOpen(false);
+   462→  }, []);
+   463→
+   464→  const selectSpeed = useCallback((idx: number) => {
+   465→    setSpeedIdx(idx);
+   466→    if (videoRef.current) videoRef.current.playbackRate = SPEEDS[idx];
+   467→  }, []);
+   468→
+   469→  const selectHlsQuality = useCallback((sel: 'auto' | number) => {
+   470→    setQualitySel(sel);
+   471→    const hls = hlsRef.current;
+   472→    if (!hls) return;
+   473→    try {
+   474→      hls.currentLevel = sel === 'auto' ? -1 : sel;
+   475→    } catch {
+   476→      /* ignore */
+   477→    }
+   478→  }, []);
+   479→
+   480→  const selectDashQuality = useCallback((sel: 'auto' | number) => {
+   481→    setQualitySel(sel);
+   482→    const p = shakaRef.current;
+   483→    if (!p) return;
+   484→    try {
+   485→      if (sel === 'auto') {
+   486→        p.configure({ abr: { enabled: true } });
+   487→      } else {
+   488→        const track = p.getVariantTracks().find((t) => t.id === sel);
+   489→        if (track) {
+   490→          p.configure({ abr: { enabled: false } });
+   491→          p.selectVariantTrack(track, true);
+   492→        }
+   493→      }
+   494→    } catch {
+   495→      /* ignore */
+   496→    }
+   497→  }, []);
+   498→
+   499→  const copyLink = useCallback(() => {
+   500→    navigator.clipboard.writeText(window.location.href).then(() => {
+   501→      setCopied(true);
+   502→      setTimeout(() => setCopied(false), 1500);
+   503→    }).catch(() => undefined);
+   504→  }, []);
+   505→
+   506→  const goBack = useCallback(() => {
+   507→    if (window.history.length > 1) window.history.back();
+   508→    else window.close();
+   509→  }, []);
+   510→
+   511→  // ------------------------------------------------------------------
+   512→  // Keyboard shortcuts (ignored while typing).
+   513→  // ------------------------------------------------------------------
+   514→  useEffect(() => {
+   515→    const onKey = (e: KeyboardEvent) => {
+   516→      const t = e.target as HTMLElement | null;
+   517→      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+   518→      if (e.key === ' ' || e.key === 'k') {
+   519→        e.preventDefault();
+   520→        togglePlay();
+   521→      } else if (e.key === 'ArrowLeft') {
+   522→        seek(-5);
+   523→      } else if (e.key === 'ArrowRight') {
+   524→        seek(5);
+   525→      } else if (e.key === 'm') {
+   526→        toggleMute();
+   527→      } else if (e.key === 'f') {
+   528→        toggleFullscreen();
+   529→      }
+   530→    };
+   531→    window.addEventListener('keydown', onKey);
+   532→    return () => window.removeEventListener('keydown', onKey);
+   533→  }, [togglePlay, seek, toggleMute, toggleFullscreen]);
+   534→
+   535→  // ------------------------------------------------------------------
+   536→  // Recovery: register a pasted signed lecture URL and play it.
+   537→  // ------------------------------------------------------------------
+   538→  const submitSignature = useCallback(async () => {
+   539→    const url = sigInput.trim();
+   540→    if (!url || sigBusy) return;
+   541→    setSigBusy(true);
+   542→    setSigMsg('');
+   543→    try {
+   544→      const res = await fetch('/api/pw-register', {
+   545→        method: 'POST',
+   546→        headers: { 'Content-Type': 'application/json' },
+   547→        body: JSON.stringify({ url }),
+   548→      });
+   549→      const body = (await res.json()) as {
+   550→        success?: boolean;
+   551→        error?: string;
+   552→        kind?: string;
+   553→        relayUrl?: string;
+   554→        clearKeys?: Record<string, string> | null;
+   555→      };
+   556→      if (!res.ok || !body.success || !body.relayUrl) {
+   557→        throw new Error(body.error || 'This signed URL could not be registered.');
+   558→      }
+   559→      setError('');
+   560→      setSigMsg('');
+   561→      setSigInput('');
+   562→      setKind((body.kind as PlayerKind) || 'mp4');
+   563→      setSrc(body.relayUrl);
+   564→      setClearKeys(body.clearKeys || null);
+   565→      setPoster('');
+   566→      setStatus('Ready to play');
+   567→      setLoading(false);
+   568→    } catch (e) {
+   569→      setSigMsg(e instanceof Error ? e.message : 'Could not register this URL.');
+   570→    } finally {
+   571→      setSigBusy(false);
+   572→    }
+   573→  }, [sigInput, sigBusy]);
+   574→
+   575→  // Auto-hide controls while playing
+   576→  useEffect(() => {
+   577→    scheduleHide();
+   578→    return () => {
+   579→      if (hideTimeout.current) clearTimeout(hideTimeout.current);
+   580→    };
+   581→  }, [scheduleHide]);
+   582→
+   583→  // ------------------------------------------------------------------
+   584→  // Side panel — interactions (comments / doubts).
+   585→  // ------------------------------------------------------------------
+   586→  const loadItems = useCallback(async (type: 'comment' | 'doubt') => {
+   587→    setListLoading(true);
+   588→    setSubmitErr('');
+   589→    try {
+   590→      const res = await fetch(`/api/player/interactions?threadKey=${encodeURIComponent(threadKey)}&type=${type}`);
+   591→      const body = (await res.json()) as { success?: boolean; items?: TopItem[] };
+   592→      setItems(body.success && Array.isArray(body.items) ? body.items : []);
+   593→    } catch {
+   594→      setItems([]);
+   595→    } finally {
+   596→      setListLoading(false);
+   597→    }
+   598→  }, [threadKey]);
+   599→
+   600→  const openPanel = useCallback((tab: PanelTab) => {
+   601→    setPanel(tab);
+   602→    setViewingDoc(null);
+   603→    setReplyTo(null);
+   604→    setDraft('');
+   605→    setSubmitErr('');
+   606→    if (tab === 'comments' || tab === 'doubts') {
+   607→      setItems([]);
+   608→      void loadItems(tab === 'doubts' ? 'doubt' : 'comment');
+   609→    } else if (tab === 'slides' || tab === 'notes' || tab === 'attachments') {
+   610→      if (!extrasLoaded && !extrasLoading) {
+   611→        setExtrasLoading(true);
+   612→        const q = new URLSearchParams({ batchId, scheduleId: videoId || realVideoId, subjectId, videoId: realVideoId });
+   613→        fetch(`/api/player/extras?${q.toString()}`)
+   614→          .then((r) => r.json())
+   615→          .then((body: { success?: boolean; slides?: DocItem[]; notes?: DocItem[]; attachments?: DocItem[] }) => {
+   616→            setExtras({
+   617→              slides: Array.isArray(body.slides) ? body.slides : [],
+   618→              notes: Array.isArray(body.notes) ? body.notes : [],
+   619→              attachments: Array.isArray(body.attachments) ? body.attachments : [],
+   620→            });
+   621→            setExtrasLoaded(true);
+   622→          })
+   623→          .catch(() => setExtrasLoaded(true))
+   624→          .finally(() => setExtrasLoading(false));
+   625→      }
+   626→    }
+   627→  }, [loadItems, extrasLoaded, extrasLoading, batchId, videoId, realVideoId, subjectId]);
+   628→
+   629→  const closePanel = useCallback(() => {
+   630→    setPanel('');
+   631→    setViewingDoc(null);
+   632→  }, []);
+   633→
+   634→  // keep the discussion list pinned to the newest message
+   635→  useEffect(() => {
+   636→    if ((panel === 'comments' || panel === 'doubts') && !listLoading && listRef.current) {
+   637→      listRef.current.scrollTop = listRef.current.scrollHeight;
+   638→    }
+   639→  }, [panel, items, listLoading]);
+   640→
+   641→  const submitPost = useCallback(async () => {
+   642→    const text = draft.trim();
+   643→    if (!text || posting) return;
+   644→    setPosting(true);
+   645→    setSubmitErr('');
+   646→    try {
+   647→      const res = await fetch('/api/player/interactions', {
+   648→        method: 'POST',
+   649→        headers: { 'Content-Type': 'application/json' },
+   650→        body: JSON.stringify({
+   651→          threadKey,
+   652→          type: panelType,
+   653→          text,
+   654→          author: displayName.trim() || 'Student',
+   655→          parentId: replyTo?.id || undefined,
+   656→        }),
+   657→      });
+   658→      const body = (await res.json()) as { success?: boolean; error?: string; item?: ReplyItem };
+   659→      if (!res.ok || !body.success || !body.item) {
+   660→        throw new Error(body.error || 'Could not post. Try again.');
+   661→      }
+   662→      const item = body.item;
+   663→      if (replyTo) {
+   664→        setItems((prev) => prev.map((it) => (it.id === replyTo.id ? { ...it, replies: [...it.replies, item] } : it)));
+   665→      } else {
+   666→        setItems((prev) => [...prev, { ...item, parentId: null, replies: [] }]);
+   667→      }
+   668→      setDraft('');
+   669→      setReplyTo(null);
+   670→    } catch (e) {
+   671→      setSubmitErr(e instanceof Error ? e.message : 'Could not post. Try again.');
+   672→    } finally {
+   673→      setPosting(false);
+   674→    }
+   675→  }, [draft, posting, threadKey, panelType, displayName, replyTo]);
+   676→
+   677→  const saveName = useCallback(() => {
+   678→    const n = nameDraft.trim().slice(0, 40);
+   679→    setDisplayName(n);
+   680→    try {
+   681→      if (n) window.localStorage.setItem('pw_display_name', n);
+   682→      else window.localStorage.removeItem('pw_display_name');
+   683→    } catch {
+   684→      /* ignore */
+   685→    }
+   686→    setNameEditing(false);
+   687→  }, [nameDraft]);
+   688→
+   689→  // ------------------------------------------------------------------
+   690→  // Progress scrubbing (pointer events — click + drag).
+   691→  // ------------------------------------------------------------------
+   692→  const fracFromEvent = (e: React.PointerEvent<HTMLDivElement>): number => {
+   693→    const rect = e.currentTarget.getBoundingClientRect();
+   694→    return Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+   695→  };
+   696→
+   697→  const onScrubStart = (e: React.PointerEvent<HTMLDivElement>) => {
+   698→    e.currentTarget.setPointerCapture(e.pointerId);
+   699→    scrubbing.current = true;
+   700→    e.currentTarget.classList.add('scrubbing');
+   701→    const f = fracFromEvent(e);
+   702→    setScrubFrac(f);
+   703→    seekToFraction(f);
+   704→  };
+   705→  const onScrubMove = (e: React.PointerEvent<HTMLDivElement>) => {
+   706→    const f = fracFromEvent(e);
+   707→    if (scrubbing.current) {
+   708→      setScrubFrac(f);
+   709→      seekToFraction(f);
+   710→    } else {
+   711→      setHoverFrac(f);
+   712→    }
+   713→  };
+   714→  const onScrubEnd = (e: React.PointerEvent<HTMLDivElement>) => {
+   715→    scrubbing.current = false;
+   716→    e.currentTarget.classList.remove('scrubbing');
+   717→    setScrubFrac(null);
+   718→  };
+   719→
+   720→  const displayFrac = duration > 0 ? (scrubFrac ?? currentTime / duration) : 0;
+   721→  const tipFrac = scrubFrac ?? hoverFrac;
+   722→  const isPwStream = kind === 'dash' || kind === 'hls';
+   723→  const ytId = kind === 'youtube' ? youtubeId(src) : '';
+   724→  const panelsEnabled = !isSrEmbed && kind !== 'youtube';
+   725→  const pipAvailable = !isSrEmbed && typeof document !== 'undefined' && document.pictureInPictureEnabled;
+   726→
+   727→  const qualityOptions: Array<{ key: 'auto' | number; label: string }> = useMemo(() => {
+   728→    if (kind === 'hls') return [{ key: 'auto', label: 'Auto' }, ...hlsLevels.map((l) => ({ key: l.index as 'auto' | number, label: l.label }))];
+   729→    if (kind === 'dash') return [{ key: 'auto', label: 'Auto' }, ...dashList.map((d) => ({ key: d.id as 'auto' | number, label: `${d.height}p` }))];
+   730→    return [{ key: 'auto', label: 'Auto' }];
+   731→  }, [kind, hlsLevels, dashList]);
+   732→
+   733→  const selectQuality = useCallback((sel: 'auto' | number) => {
+   734→    if (kind === 'hls') selectHlsQuality(sel);
+   735→    else if (kind === 'dash') selectDashQuality(sel);
+   736→    setSettingsSheet('quality');
+   737→  }, [kind, selectHlsQuality, selectDashQuality]);
+   738→
+   739→  if (isSrEmbed) {
+   740→    return (
+   741→      <div className="sb-player-root">
+   742→        <div className="video-wrapper">
+   743→          <iframe
+   744→            src={srUrl}
+   745→            title={title}
+   746→            allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+   747→            allowFullScreen
+   748→            style={{ width: '100%', height: '100%', border: 0, background: '#000' }}
+   749→          />
+   750→          <div className="controls-overlay">
+   751→            <div className="top-bar">
+   752→              <div className="top-left">
+   753→                <i className="fas fa-arrow-left back-btn" onClick={goBack}></i>
+   754→                <div className="video-title">
+   755→                  {title}
+   756→                  <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.5px', padding: '2px 6px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle' }}>STUDY RATNA</span>
+   757→                </div>
+   758→              </div>
+   759→              <div className="top-icons">
+   760→                <i className="fas fa-expand icon-btn" onClick={toggleFullscreen}></i>
+   761→              </div>
+   762→            </div>
+   763→          </div>
+   764→        </div>
+   765→      </div>
+   766→    );
+   767→  }
+   768→
+   769→  return (
+   770→    <div className="sb-player-root" ref={wrapperRef}
+   771→      onMouseMove={scheduleHide}
+   772→      onClick={scheduleHide}
+   773→    >
+   774→      <h1 className="sr-only-player">{title}</h1>
+   775→      <div className="video-wrapper">
+   776→        {kind === 'youtube' && ytId ? (
+   777→          <iframe
+   778→            src={`https://www.youtube.com/embed/${encodeURIComponent(ytId)}?autoplay=1&rel=0`}
+   779→            title={title}
+   780→            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+   781→            allowFullScreen
+   782→            style={{ width: '100%', height: '100%', border: 0 }}
+   783→          />
+   784→        ) : (
+   785→          // Preview-panel/extension scripts can tag <video> (e.g. class
+   786→          // "vq-video-detected") before React hydrates — suppress the
+   787→          // harmless attribute mismatch this causes.
+   788→          <video
+   789→            suppressHydrationWarning
+   790→            ref={videoRef}
+   791→            playsInline
+   792→            loop={loop}
+   793→            poster={poster || undefined}
+   794→            onPlay={() => { setPlaying(true); scheduleHide(); }}
+   795→            onPause={() => { setPlaying(false); setCenterVisible(true); setControlsHidden(false); }}
+   796→            onLoadedMetadata={(e) => {
+   797→              setDuration(e.currentTarget.duration || 0);
+   798→              e.currentTarget.playbackRate = SPEEDS[speedIdx];
+   799→              e.currentTarget.volume = volume / 100;
+   800→            }}
+   801→            onTimeUpdate={(e) => {
+   802→              const v = e.currentTarget;
+   803→              setCurrentTime(v.currentTime);
+   804→              try {
+   805→                if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1));
+   806→              } catch { /* ignore */ }
+   807→              // Award XP once when 90% watched
+   808→              if (!xpGiven.current && v.duration > 0 && v.currentTime / v.duration >= 0.9) {
+   809→                xpGiven.current = true;
+   810→                addXP(10, 'Watched Video');
+   811→              }
+   812→            }}
+   813→            onProgress={(e) => {
+   814→              const v = e.currentTarget;
+   815→              try {
+   816→                if (v.buffered.length) setBuffered(v.buffered.end(v.buffered.length - 1));
+   817→              } catch { /* ignore */ }
+   818→            }}
+   819→            onEnded={() => {
+   820→              setPlaying(false);
+   821→              if (!xpGiven.current) {
+   822→                xpGiven.current = true;
+   823→                addXP(10, 'Watched Video');
+   824→              }
+   825→            }}
+   826→            onCanPlay={() => { setLoading(false); }}
+   827→            onError={() => {
+   828→              if (src) {
+   829→                setError('Unable to load the stream. Please try again.');
+   830→                setLoading(false);
+   831→              }
+   832→            }}
+   833→          />
+   834→        )}
+   835→
+   836→        {error ? (
+   837→          <div className="error-box">
+   838→            <i className="fas fa-video-slash" style={{ fontSize: '2rem', marginBottom: '10px' }}></i>
+   839→            <br />
+   840→            <span>{error}</span>
+   841→            <div className="sig-recovery">
+   842→              <div className="sig-recovery-title">
+   843→                <i className="fas fa-key"></i> Have a signed lecture URL?
+   844→              </div>
+   845→              <p className="sig-recovery-hint">
+   846→                Paste the FULL signed URL (…/master.mpd?Signature=…&amp;Key-Pair-Id=…&amp;Policy=…) to unlock
+   847→                this stream. It is registered server-side and kept for future plays.
+   848→              </p>
+   849→              <input
+   850→                className="sig-recovery-input"
+   851→                type="url"
+   852→                value={sigInput}
+   853→                placeholder="https://…/master.mpd?Signature=…"
+   854→                onChange={(e) => setSigInput(e.target.value)}
+   855→                onKeyDown={(e) => {
+   856→                  if (e.key === 'Enter') void submitSignature();
+   857→                }}
+   858→              />
+   859→              <button
+   860→                className="sig-recovery-btn"
+   861→                type="button"
+   862→                onClick={() => void submitSignature()}
+   863→                disabled={sigBusy || !sigInput.trim()}
+   864→              >
+   865→                {sigBusy ? (
+   866→                  <>
+   867→                    <i className="fas fa-spinner fa-spin"></i> Verifying…
+   868→                  </>
+   869→                ) : (
+   870→                  <>
+   871→                    <i className="fas fa-play"></i> Load Stream
+   872→                  </>
+   873→                )}
+   874→              </button>
+   875→              {sigMsg ? <div className="sig-recovery-msg">{sigMsg}</div> : null}
+   876→            </div>
+   877→          </div>
+   878→        ) : null}
+   879→
+   880→        {loading && !error && kind !== 'youtube' ? (
+   881→          <div className="loader-overlay">
+   882→            <div className="spinner-ring"></div>
+   883→            <div className="status-text">{status}</div>
+   884→            <div className="status-text" style={{ fontSize: '0.75rem', color: '#64748b', marginTop: '8px' }}>{statusSub}</div>
+   885→          </div>
+   886→        ) : null}
+   887→
+   888→        {/* ---------------- side panel / bottom sheet ---------------- */}
+   889→        {panel && panelsEnabled ? (
+   890→          <aside className="sb-panel" onClick={(e) => e.stopPropagation()}>
+   891→            {viewingDoc ? (
+   892→              <div className="pdf-view">
+   893→                <div className="pdf-view-head">
+   894→                  <button className="panel-close" style={{ marginLeft: 0 }} aria-label="Back to list" onClick={() => setViewingDoc(null)}>
+   895→                    <i className="fas fa-chevron-left"></i>
+   896→                  </button>
+   897→                  <div className="pdf-view-name">{viewingDoc.name}</div>
+   898→                  <a className="doc-btn" href={viewingDoc.url} target="_blank" rel="noreferrer">
+   899→                    <i className="fas fa-external-link-alt" style={{ fontSize: '0.65rem' }}></i> Open
+   900→                  </a>
+   901→                </div>
+   902→                <iframe className="pdf-frame" src={viewingDoc.url} title={viewingDoc.name} />
+   903→              </div>
+   904→            ) : (
+   905→              <>
+   906→                <div className="panel-head">
+   907→                  <button className={`panel-tab ${panel === 'comments' ? 'active' : ''}`} onClick={() => openPanel('comments')}>Comments</button>
+   908→                  <button className={`panel-tab ${panel === 'doubts' ? 'active' : ''}`} onClick={() => openPanel('doubts')}>Doubts</button>
+   909→                  <button className={`panel-tab ${panel === 'slides' ? 'active' : ''}`} onClick={() => openPanel('slides')}>Slides</button>
+   910→                  <button className={`panel-tab ${panel === 'notes' ? 'active' : ''}`} onClick={() => openPanel('notes')}>Notes</button>
+   911→                  <button className={`panel-tab ${panel === 'attachments' ? 'active' : ''}`} onClick={() => openPanel('attachments')}>Attachments</button>
+   912→                  <button className="panel-close" aria-label="Close panel" onClick={closePanel}>
+   913→                    <i className="fas fa-times"></i>
+   914→                  </button>
+   915→                </div>
+   916→
+   917→                {(panel === 'comments' || panel === 'doubts') ? (
+   918→                  <div className="panel-body">
+   919→                    <div className="panel-list" ref={listRef}>
+   920→                      {listLoading ? (
+   921→                        <div className="panel-loading"><i className="fas fa-spinner fa-spin"></i> Loading…</div>
+   922→                      ) : items.length === 0 ? (
+   923→                        <div className="panel-empty">
+   924→                          {panel === 'doubts' ? <DoubtIcon /> : <i className="far fa-comment-dots"></i>}
+   925→                          <div className="pe-title">{panel === 'doubts' ? 'No doubts yet' : 'No comments yet'}</div>
+   926→                          <div className="pe-sub">
+   927→                            {panel === 'doubts'
+   928→                              ? 'Stuck somewhere in this lecture? Ask your doubt below and get it cleared.'
+   929→                              : 'Be the first to share your thoughts on this lecture.'}
+   930→                          </div>
+   931→                        </div>
+   932→                      ) : (
+   933→                        <>
+   934→                          {items.map((it) => (
+   935→                            <div key={it.id}>
+   936→                              <div className="cm">
+   937→                                <div className="cm-avatar">{(it.author || 'S').charAt(0)}</div>
+   938→                                <div className="cm-main">
+   939→                                  <div className="cm-top">
+   940→                                    <span className="cm-name">{it.author || 'Student'}</span>
+   941→                                    <span className="cm-time">{timeAgo(it.createdAt)}</span>
+   942→                                  </div>
+   943→                                  <div className="cm-text">{it.text}</div>
+   944→                                  <div className="cm-actions">
+   945→                                    <button className="cm-act" onClick={() => { setReplyTo({ id: it.id, author: it.author || 'Student' }); }}>Reply</button>
+   946→                                  </div>
+   947→                                </div>
+   948→                              </div>
+   949→                              {it.replies.length > 0 ? (
+   950→                                <>
+   951→                                  <div className="cm-replies">
+   952→                                    {it.replies.map((r) => (
+   953→                                      <div className="cm" key={r.id}>
+   954→                                        <div className="cm-avatar sm">{(r.author || 'S').charAt(0)}</div>
+   955→                                        <div className="cm-main">
+   956→                                          <div className="cm-top">
+   957→                                            <span className="cm-name">{r.author || 'Student'}</span>
+   958→                                            <span className="cm-time">{timeAgo(r.createdAt)}</span>
+   959→                                          </div>
+   960→                                          <div className="cm-text">{r.text}</div>
+   961→                                        </div>
+   962→                                      </div>
+   963→                                    ))}
+   964→                                  </div>
+   965→                                </>
+   966→                              ) : null}
+   967→                            </div>
+   968→                          ))}
+   969→                          <div className="list-end">You&apos;re all caught up</div>
+   970→                        </>
+   971→                      )}
+   972→                    </div>
+   973→                    <div className="composer-wrap">
+   974→                      {replyTo ? (
+   975→                        <div className="reply-chip">
+   976→                          <span>Replying to <b>@{replyTo.author}</b></span>
+   977→                          <span className="reply-x" onClick={() => setReplyTo(null)} role="button" aria-label="Cancel reply">✕</span>
+   978→                        </div>
+   979→                      ) : null}
+   980→                      <div className="name-row">
+   981→                        {nameEditing ? (
+   982→                          <>
+   983→                            <input
+   984→                              className="name-edit-input"
+   985→                              value={nameDraft}
+   986→                              placeholder="Your name"
+   987→                              maxLength={40}
+   988→                              autoFocus
+   989→                              onChange={(e) => setNameDraft(e.target.value)}
+   990→                              onKeyDown={(e) => { if (e.key === 'Enter') saveName(); }}
+   991→                            />
+   992→                            <button className="name-edit-btn" onClick={saveName}>Save</button>
+   993→                          </>
+   994→                        ) : (
+   995→                          <>
+   996→                            <span>Commenting as <b style={{ color: '#9ca3af' }}>{displayName || 'Student'}</b></span>
+   997→                            <button className="name-edit-btn" onClick={() => { setNameDraft(displayName); setNameEditing(true); }}>Edit</button>
+   998→                          </>
+   999→                        )}
+  1000→                      </div>
+  1001→                      {submitErr ? (
+  1002→                        <div className="name-row" style={{ color: '#f87171' }}>{submitErr}</div>
+  1003→                      ) : null}
+  1004→                      <div className="composer">
+  1005→                        <input
+  1006→                          value={draft}
+  1007→                          placeholder={panel === 'doubts' ? 'Have a doubt? Ask here…' : 'Add a comment…'}
+  1008→                          maxLength={2000}
+  1009→                          onChange={(e) => setDraft(e.target.value)}
+  1010→                          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void submitPost(); } }}
+  1011→                        />
+  1012→                        <button className="send-btn" aria-label="Send" disabled={!draft.trim() || posting} onClick={() => void submitPost()}>
+  1013→                          <i className={`fas ${posting ? 'fa-spinner fa-spin' : 'fa-paper-plane'}`}></i>
+  1014→                        </button>
+  1015→                      </div>
+  1016→                    </div>
+  1017→                  </div>
+  1018→                ) : (
+  1019→                  <div className="panel-body">
+  1020→                    {extrasLoading ? (
+  1021→                      <div className="panel-loading"><i className="fas fa-spinner fa-spin"></i> Loading…</div>
+  1022→                    ) : (
+  1023→                      <>
+  1024→                        {panel === 'slides' && extras.slides.length === 0 ? (
+  1025→                          <div className="panel-empty">
+  1026→                            <SlidesIcon />
+  1027→                            <div className="pe-title">No slides</div>
+  1028→                            <div className="pe-sub">Slides shared by the educator for this lecture will appear here.</div>
+  1029→                          </div>
+  1030→                        ) : null}
+  1031→                        {panel === 'notes' && extras.notes.length === 0 ? (
+  1032→                          <div className="panel-empty">
+  1033→                            <i className="far fa-file-pdf"></i>
+  1034→                            <div className="pe-title">No notes</div>
+  1035→                            <div className="pe-sub">Class notes for this lecture will appear here.</div>
+  1036→                          </div>
+  1037→                        ) : null}
+  1038→                        {panel === 'attachments' && extras.attachments.length === 0 ? (
+  1039→                          <div className="panel-empty">
+  1040→                            <i className="fas fa-paperclip"></i>
+  1041→                            <div className="pe-title">No attachments</div>
+  1042→                            <div className="pe-sub">DPPs and other resources will appear here.</div>
+  1043→                          </div>
+  1044→                        ) : null}
+  1045→                        {(panel === 'slides' ? extras.slides : panel === 'notes' ? extras.notes : extras.attachments).length > 0 ? (
+  1046→                          <div className="panel-list">
+  1047→                            {(panel === 'slides' ? extras.slides : panel === 'notes' ? extras.notes : extras.attachments).map((d) => (
+  1048→                              <div className="doc-item" key={d.url}>
+  1049→                                <i className="far fa-file-pdf doc-icon"></i>
+  1050→                                <div className="doc-name">{d.name || 'Document'}</div>
+  1051→                                <button className="doc-btn primary" onClick={() => setViewingDoc(d)}>View</button>
+  1052→                                <a className="doc-btn" href={d.url} target="_blank" rel="noreferrer">Open</a>
+  1053→                              </div>
+  1054→                            ))}
+  1055→                          </div>
+  1056→                        ) : null}
+  1057→                      </>
+  1058→                    )}
+  1059→                  </div>
+  1060→                )}
+  1061→              </>
+  1062→            )}
+  1063→          </aside>
+  1064→        ) : null}
+  1065→
+  1066→        <div className={`controls-overlay ${controlsHidden ? 'hidden' : ''}`}>
+  1067→          <div className="top-bar">
+  1068→            <div className="top-left">
+  1069→              <i className="fas fa-arrow-left back-btn" onClick={goBack} role="button" aria-label="Back"></i>
+  1070→            </div>
+  1071→            <div className="top-icons">
+  1072→              <i className="fas fa-ellipsis-v icon-btn" onClick={(e) => { e.stopPropagation(); setMenuOpen(true); }} role="button" aria-label="More options"></i>
+  1073→            </div>
+  1074→          </div>
+  1075→
+  1076→          {kind !== 'youtube' ? (
+  1077→            <>
+  1078→              <div className="center-area" onClick={togglePlay}>
+  1079→                {centerVisible ? (
+  1080→                  <div className={`play-pause-center ${playing ? '' : 'paused'}`}>
+  1081→                    <i className={`fas ${playing ? 'fa-pause' : 'fa-play'}`}></i>
+  1082→                  </div>
+  1083→                ) : null}
+  1084→              </div>
+  1085→
+  1086→              {seekFlash ? <div className="seek-flash">{seekFlash}</div> : null}
+  1087→
+  1088→              <div className="bottom-gradient">
+  1089→                <div className="time-row">
+  1090→                  <span>{formatTime(currentTime)}</span>
+  1091→                  <button className="speed-chip" onClick={(e) => { e.stopPropagation(); setSettingsSheet('speed'); }}>
+  1092→                    {SPEEDS[speedIdx]}x
+  1093→                  </button>
+  1094→                  <span className="time-dur">{formatTime(duration)}</span>
+  1095→                </div>
+  1096→
+  1097→                <div
+  1098→                  className="progress-wrapper"
+  1099→                  onPointerDown={onScrubStart}
+  1100→                  onPointerMove={onScrubMove}
+  1101→                  onPointerUp={onScrubEnd}
+  1102→                  onPointerCancel={onScrubEnd}
+  1103→                  onPointerLeave={() => { if (!scrubbing.current) setHoverFrac(null); }}
+  1104→                  role="slider"
+  1105→                  aria-label="Seek"
+  1106→                  aria-valuemin={0}
+  1107→                  aria-valuemax={Math.round(duration)}
+  1108→                  aria-valuenow={Math.round(currentTime)}
+  1109→                >
+  1110→                  <div className="progress-track">
+  1111→                    <div className="progress-buffered" style={{ width: duration ? `${Math.min(100, (buffered / duration) * 100)}%` : '0%' }}></div>
+  1112→                    <div className="progress-fill" style={{ width: `${displayFrac * 100}%` }}></div>
+  1113→                  </div>
+  1114→                  <div className="progress-thumb" style={{ left: `${displayFrac * 100}%` }}></div>
+  1115→                  {tipFrac !== null && duration > 0 ? (
+  1116→                    <div className="progress-tip" style={{ left: `${tipFrac * 100}%` }}>{formatTime(tipFrac * duration)}</div>
+  1117→                  ) : null}
+  1118→                </div>
+  1119→
+  1120→                <div className="controls-row">
+  1121→                  <div className="controls-left">
+  1122→                    <button className="c-btn play-btn" aria-label={playing ? 'Pause' : 'Play'} onClick={togglePlay}>
+  1123→                      <i className={`fas ${playing ? 'fa-pause' : 'fa-play'}`}></i>
+  1124→                    </button>
+  1125→                    <button className="c-btn skip-btn" aria-label="Back 10 seconds" onClick={() => seek(-10)}>
+  1126→                      <i className="fas fa-rotate-left"></i>
+  1127→                      <span className="skip-text">10</span>
+  1128→                    </button>
+  1129→                    <button className="c-btn skip-btn" aria-label="Forward 10 seconds" onClick={() => seek(10)}>
+  1130→                      <i className="fas fa-rotate-right"></i>
+  1131→                      <span className="skip-text">10</span>
+  1132→                    </button>
+  1133→                    <div className="vol-wrap">
+  1134→                      <button className="c-btn vol-btn" aria-label={muted ? 'Unmute' : 'Mute'} onClick={toggleMute}>
+  1135→                        <i className={`fas ${muted || volume === 0 ? 'fa-volume-mute' : volume < 50 ? 'fa-volume-down' : 'fa-volume-up'}`}></i>
+  1136→                      </button>
+  1137→                      <div className="vol-pop" onClick={(e) => e.stopPropagation()}>
+  1138→                        <input
+  1139→                          className="vol-range"
+  1140→                          type="range"
+  1141→                          min={0}
+  1142→                          max={100}
+  1143→                          value={volume}
+  1144→                          aria-label="Volume"
+  1145→                          onChange={(e) => changeVolume(Number(e.target.value))}
+  1146→                        />
+  1147→                      </div>
+  1148→                    </div>
+  1149→                  </div>
+  1150→                  <div className="controls-right">
+  1151→                    {panelsEnabled ? (
+  1152→                      <>
+  1153→                        <button className="c-btn panel-btn" aria-label="Comments" title="Comments" onClick={(e) => { e.stopPropagation(); openPanel('comments'); }}>
+  1154→                          <i className="far fa-comment-dots"></i>
+  1155→                        </button>
+  1156→                        <button className="c-btn panel-btn" aria-label="Doubts" title="Doubts" onClick={(e) => { e.stopPropagation(); openPanel('doubts'); }}>
+  1157→                          <DoubtIcon />
+  1158→                        </button>
+  1159→                        <button className="c-btn panel-btn" aria-label="Slides" title="Slides" onClick={(e) => { e.stopPropagation(); openPanel('slides'); }}>
+  1160→                          <SlidesIcon />
+  1161→                        </button>
+  1162→                        <button className="c-btn panel-btn" aria-label="Notes" title="Notes" onClick={(e) => { e.stopPropagation(); openPanel('notes'); }}>
+  1163→                          <i className="far fa-edit"></i>
+  1164→                        </button>
+  1165→                      </>
+  1166→                    ) : null}
+  1167→                    <button className="c-btn gear-btn" aria-label="Settings" onClick={(e) => { e.stopPropagation(); setSettingsSheet('root'); }}>
+  1168→                      <i className="fas fa-cog"></i>
+  1169→                    </button>
+  1170→                    <button className="c-btn fullscreen-btn" aria-label={isFs ? 'Exit fullscreen' : 'Fullscreen'} onClick={toggleFullscreen}>
+  1171→                      <i className={`fas ${isFs ? 'fa-compress' : 'fa-expand'}`}></i>
+  1172→                    </button>
+  1173→                  </div>
+  1174→                </div>
+  1175→              </div>
+  1176→            </>
+  1177→          ) : null}
+  1178→
+  1179→        </div>
+  1180→
+  1181→        {/* -------- settings sheet (gear / speed chip) — outside the
+  1182→             controls overlay so it stacks above the error box -------- */}
+  1183→          <div
+  1184→            className={`sheet-overlay ${settingsSheet ? 'active' : ''}`}
+  1185→            onClick={(e) => { e.stopPropagation(); setSettingsSheet(''); }}
+  1186→          >
+  1187→            <div className="sb-sheet" onClick={(e) => e.stopPropagation()}>
+  1188→              <div className="sheet-handle-wrap"><div className="sheet-handle"></div></div>
+  1189→
+  1190→              {settingsSheet === 'root' ? (
+  1191→                <>
+  1192→                  <div className="sheet-title"><i className="fas fa-cog" style={{ color: '#9ca3af' }}></i> Playback settings</div>
+  1193→                  <div className="sheet-row" onClick={() => setSettingsSheet('speed')}>
+  1194→                    <span className="row-icon"><i className="fas fa-gauge-high"></i></span>
+  1195→                    <span>Playback speed</span>
+  1196→                    <span className="row-val">{SPEEDS[speedIdx]}x <i className="fas fa-chevron-right" style={{ fontSize: '0.65rem' }}></i></span>
+  1197→                  </div>
+  1198→                  <div className={`sheet-row ${isPwStream ? '' : 'disabled'}`} onClick={() => { if (isPwStream) setSettingsSheet('quality'); }}>
+  1199→                    <span className="row-icon"><i className="fas fa-sliders"></i></span>
+  1200→                    <span>Quality</span>
+  1201→                    <span className="row-val">
+  1202→                      {qualityOptions.find((q) => q.key === qualitySel)?.label || 'Auto'}
+  1203→                      <i className="fas fa-chevron-right" style={{ fontSize: '0.65rem' }}></i>
+  1204→                    </span>
+  1205→                  </div>
+  1206→                  <div className="sheet-row" onClick={() => setLoop((l) => !l)}>
+  1207→                    <span className="row-icon"><i className="fas fa-repeat"></i></span>
+  1208→                    <span>Loop</span>
+  1209→                    {loop ? <span className="row-check"><i className="fas fa-check"></i></span> : <span className="row-val">Off</span>}
+  1210→                  </div>
+  1211→                </>
+  1212→              ) : null}
+  1213→
+  1214→              {settingsSheet === 'speed' ? (
+  1215→                <>
+  1216→                  <div className="sheet-title">
+  1217→                    <span className="sheet-back" onClick={() => setSettingsSheet('root')} role="button" aria-label="Back"><i className="fas fa-arrow-left"></i></span>
+  1218→                    Playback speed
+  1219→                  </div>
+  1220→                  {SPEEDS.map((s, i) => (
+  1221→                    <div key={s} className={`sheet-row ${i === speedIdx ? 'checked' : ''}`} onClick={() => { selectSpeed(i); setSettingsSheet(''); }}>
+  1222→                      <span className="row-icon"><i className="fas fa-gauge-high"></i></span>
+  1223→                      <span>{s}x</span>
+  1224→                      {i === speedIdx ? <span className="row-check"><i className="fas fa-check"></i></span> : null}
+  1225→                    </div>
+  1226→                  ))}
+  1227→                </>
+  1228→              ) : null}
+  1229→
+  1230→              {settingsSheet === 'quality' ? (
+  1231→                <>
+  1232→                  <div className="sheet-title">
+  1233→                    <span className="sheet-back" onClick={() => setSettingsSheet('root')} role="button" aria-label="Back"><i className="fas fa-arrow-left"></i></span>
+  1234→                    Quality
+  1235→                  </div>
+  1236→                  {qualityOptions.map((q) => (
+  1237→                    <div key={String(q.key)} className={`sheet-row ${q.key === qualitySel ? 'checked' : ''}`} onClick={() => { selectQuality(q.key); setSettingsSheet(''); }}>
+  1238→                      <span className="row-icon"><i className="fas fa-sliders"></i></span>
+  1239→                      <span>{q.label}</span>
+  1240→                      {q.key === qualitySel ? <span className="row-check"><i className="fas fa-check"></i></span> : null}
+  1241→                    </div>
+  1242→                  ))}
+  1243→                </>
+  1244→              ) : null}
+  1245→            </div>
+  1246→          </div>
+  1247→
+  1248→          {/* -------- kebab sheet (⋮) -------- */}
+  1249→          <div
+  1250→            className={`sheet-overlay ${menuOpen ? 'active' : ''}`}
+  1251→            onClick={(e) => { e.stopPropagation(); setMenuOpen(false); }}
+  1252→          >
+  1253→            <div className="sb-sheet" onClick={(e) => e.stopPropagation()}>
+  1254→              <div className="sheet-handle-wrap"><div className="sheet-handle"></div></div>
+  1255→              <div className="sheet-title"><i className="fas fa-ellipsis-v" style={{ color: '#9ca3af' }}></i> More options</div>
+  1256→              <div className="sheet-sep"></div>
+  1257→              {pipAvailable ? (
+  1258→                <div className="sheet-row" onClick={togglePip}>
+  1259→                  <span className="row-icon"><i className="fas fa-clone"></i></span>
+  1260→                  <span>Picture-in-picture</span>
+  1261→                </div>
+  1262→              ) : null}
+  1263→              <div className="sheet-row" onClick={() => { copyLink(); setMenuOpen(false); }}>
+  1264→                <span className="row-icon"><i className="fas fa-link"></i></span>
+  1265→                <span>{copied ? 'Link Copied!' : 'Copy Link'}</span>
+  1266→              </div>
+  1267→              <div className="sheet-row" style={{ cursor: 'default' }}>
+  1268→                <span className="row-icon"><i className="fas fa-film"></i></span>
+  1269→                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{title}</span>
+  1270→              </div>
+  1271→            </div>
+  1272→          </div>
+  1273→      </div>
+  1274→    </div>
+  1275→  );
+  1276→}
+  1277→
+  1278→export default function PlayerPage() {
+  1279→  return (
+  1280→    <Suspense fallback={
+  1281→      <div className="sb-player-root">
+  1282→        <div className="video-wrapper">
+  1283→          <div className="loader-overlay">
+  1284→            <div className="spinner-ring"></div>
+  1285→            <div className="status-text">Loading Player...</div>
+  1286→          </div>
+  1287→        </div>
+  1288→      </div>
+  1289→    }>
+  1290→      <PlayerInner />
+  1291→    </Suspense>
+  1292→  );
+  1293→}
+  1294→

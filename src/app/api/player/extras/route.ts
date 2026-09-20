@@ -134,10 +134,13 @@ export async function GET(request: NextRequest) {
   const subjectId = (searchParams.get('subjectId') || '').trim();
   const videoId = (searchParams.get('videoId') || '').trim();
 
-  const contentId = scheduleId || videoId;
+  // Try the schedule id first, then the real video id — some lectures only
+  // resolve upstream under one of the two, and every lecture should get its
+  // best shot at slides/notes/attachments.
+  const candidates = Array.from(new Set([scheduleId, videoId].filter(Boolean)));
 
   try {
-    if (!contentId) {
+    if (candidates.length === 0) {
       return NextResponse.json({
         success: true,
         slides: [],
@@ -147,72 +150,83 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const raced = await Promise.race([
-      lxScheduleDetail(batchId, subjectId, contentId),
-      new Promise<typeof TIMEOUT>((resolve) => setTimeout(() => resolve(TIMEOUT), UPSTREAM_TIMEOUT_MS)),
-    ]);
+    const extract = (detail: LxScheduleItem & Record<string, unknown>): {
+      slides: ExtrasItem[];
+      notes: ExtrasItem[];
+      attachments: ExtrasItem[];
+    } => {
+      const videoDetails =
+        detail.videoDetails && typeof detail.videoDetails === 'object'
+          ? (detail.videoDetails as unknown as Record<string, unknown>)
+          : null;
 
-    if (raced === TIMEOUT) {
-      return NextResponse.json({
-        success: true,
-        slides: [],
-        notes: [],
-        attachments: [],
-        warning: 'upstream request timed out',
+      // notes: homework attachments (upstream also nests DPP notes under dpp.homeworkIds —
+      // the frontend LectureData shape sees them merged, so merge here too).
+      const notes: ExtrasItem[] = [];
+      flattenContentNodes(notes, detail.homeworkIds, (n) =>
+        typeof n.topic === 'string' ? n.topic.trim() : '',
+      );
+      flattenContentNodes(notes, (detail.dpp as Record<string, unknown> | null | undefined)?.homeworkIds, (n) =>
+        typeof n.topic === 'string' ? n.topic.trim() : '',
+      );
+
+      // attachments: exercise/DPP attachments
+      const attachments: ExtrasItem[] = [];
+      flattenContentNodes(attachments, detail.exerciseIds, (n) => {
+        for (const field of ['title', 'topic', 'name'] as const) {
+          const v = n[field];
+          if (typeof v === 'string' && v.trim()) return v.trim();
+        }
+        return '';
       });
-    }
-    if (!raced || typeof raced !== 'object') {
-      return NextResponse.json({
-        success: true,
-        slides: [],
-        notes: [],
-        attachments: [],
-        warning: 'schedule detail not found upstream',
-      });
-    }
 
-    const detail = raced as LxScheduleItem & Record<string, unknown>;
-    const videoDetails =
-      detail.videoDetails && typeof detail.videoDetails === 'object'
-        ? (detail.videoDetails as unknown as Record<string, unknown>)
-        : null;
-
-    // notes: homework attachments (upstream also nests DPP notes under dpp.homeworkIds —
-    // the frontend LectureData shape sees them merged, so merge here too).
-    const notes: ExtrasItem[] = [];
-    flattenContentNodes(notes, detail.homeworkIds, (n) =>
-      typeof n.topic === 'string' ? n.topic.trim() : '',
-    );
-    flattenContentNodes(notes, (detail.dpp as Record<string, unknown> | null | undefined)?.homeworkIds, (n) =>
-      typeof n.topic === 'string' ? n.topic.trim() : '',
-    );
-
-    // attachments: exercise/DPP attachments
-    const attachments: ExtrasItem[] = [];
-    flattenContentNodes(attachments, detail.exerciseIds, (n) => {
-      for (const field of ['title', 'topic', 'name'] as const) {
-        const v = n[field];
-        if (typeof v === 'string' && v.trim()) return v.trim();
+      // slides: doc-ish fields directly on the item or its videoDetails
+      const slides: ExtrasItem[] = [];
+      const slideSources: Array<Record<string, unknown>> = [detail];
+      if (videoDetails) slideSources.push(videoDetails as Record<string, unknown>);
+      const DOC_FIELDS = ['videoDocUrl', 'docUrl', 'slidesUrl', 'docUrlObj', 'attachmentIds'] as const;
+      for (const source of slideSources) {
+        for (const field of DOC_FIELDS) {
+          pushDocLike(slides, source[field], 'Slides');
+        }
       }
-      return '';
-    });
 
-    // slides: doc-ish fields directly on the item or its videoDetails
-    const slides: ExtrasItem[] = [];
-    const slideSources: Array<Record<string, unknown>> = [detail];
-    if (videoDetails) slideSources.push(videoDetails as Record<string, unknown>);
-    const DOC_FIELDS = ['videoDocUrl', 'docUrl', 'slidesUrl', 'docUrlObj', 'attachmentIds'] as const;
-    for (const source of slideSources) {
-      for (const field of DOC_FIELDS) {
-        pushDocLike(slides, source[field], 'Slides');
+      return {
+        slides: dedupeByUrl(slides),
+        notes: dedupeByUrl(notes),
+        attachments: dedupeByUrl(attachments),
+      };
+    };
+
+    let last = { slides: [] as ExtrasItem[], notes: [] as ExtrasItem[], attachments: [] as ExtrasItem[] };
+    let notFound = 0;
+
+    for (const contentId of candidates) {
+      const raced = await Promise.race([
+        lxScheduleDetail(batchId, subjectId, contentId),
+        new Promise<typeof TIMEOUT>((resolve) => setTimeout(() => resolve(TIMEOUT), UPSTREAM_TIMEOUT_MS)),
+      ]);
+
+      if (raced === TIMEOUT) {
+        return NextResponse.json({
+          success: true,
+          ...last,
+          warning: 'upstream request timed out',
+        });
       }
+      if (!raced || typeof raced !== 'object') {
+        notFound += 1;
+        continue;
+      }
+
+      last = extract(raced as LxScheduleItem & Record<string, unknown>);
+      if (last.slides.length || last.notes.length || last.attachments.length) break;
     }
 
     return NextResponse.json({
       success: true,
-      slides: dedupeByUrl(slides),
-      notes: dedupeByUrl(notes),
-      attachments: dedupeByUrl(attachments),
+      ...last,
+      ...(notFound === candidates.length ? { warning: 'schedule detail not found upstream' } : {}),
     });
   } catch (error) {
     console.error('[api/player/extras] GET failed:', error);
