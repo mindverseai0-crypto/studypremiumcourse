@@ -30,3 +30,16 @@ model Post {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+model PlayerComment {
+  id        String   @id @default(cuid())
+  threadKey String
+  type      String   @default("comment") // "comment" | "doubt"
+  parentId  String? // reply target (top-level comment id)
+  author    String   @default("Student")
+  text      String
+  createdAt DateTime @default(now())
+
+  @@index([threadKey, type])
+  @@index([parentId])
+}
