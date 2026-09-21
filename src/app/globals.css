@@ -397,3 +397,55 @@
 .dl-bar { display: block; height: 6px; border-radius: 999px; background: #eef2f7; overflow: hidden; }
 .dl-bar-fill { display: block; height: 100%; border-radius: 999px; background: linear-gradient(90deg, #fbbf24, #f59e0b); transition: width 0.4s ease; }
 /* dl styles v2 */
+.sb-app .dl-tag-docs { background: #fee2e2; color: #b91c1c; }
+
+/* ---------------- offline mode ---------------- */
+.sb-app .offline-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 16px 0;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: #111827;
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(17, 24, 39, 0.18);
+}
+.sb-app .offline-banner > i { color: var(--sb-primary); font-size: 1.15rem; flex-shrink: 0; }
+.sb-app .offline-banner .ob-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.sb-app .offline-banner .ob-text b { font-size: 0.88rem; }
+.sb-app .offline-banner .ob-text span { font-size: 0.72rem; color: #9ca3af; line-height: 1.35; }
+.sb-app .offline-banner button {
+  background: var(--sb-primary);
+  color: #111827;
+  border: none;
+  font-weight: 800;
+  font-size: 0.75rem;
+  padding: 9px 14px;
+  border-radius: 999px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: var(--sb-transition);
+}
+.sb-app .offline-banner button:hover { filter: brightness(1.08); }
+
+.sb-app .online-chip {
+  position: fixed;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  background: #111827;
+  color: #d1fae5;
+  font-weight: 700;
+  font-size: 0.78rem;
+  padding: 9px 16px;
+  border-radius: 999px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.25);
+  z-index: 3000;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  animation: sbSlideUp 0.3s ease;
+}
+.sb-app .online-chip i { color: #22c55e; }

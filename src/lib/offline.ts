@@ -25,6 +25,15 @@
 
 export type SbDownloadStatus = 'collecting' | 'downloading' | 'paused' | 'done' | 'error';
 
+/** One lecture document (class note / DPP PDF) saved with the lecture.
+ *  `url` is the SAME-ORIGIN relay URL (/api/pw-doc?u=…) — it doubles as the
+ *  Cache-API key and the offline playback URL (served by the service worker). */
+export interface SbDoc {
+  name: string;
+  kind: 'note' | 'dpp';
+  url: string;
+}
+
 /** One offline lecture. Persisted in IndexedDB store `downloads`. */
 export interface SbDownload {
   id: string; // stable lecture id (videoId || realVideoId || 'url:<path>')
@@ -45,6 +54,9 @@ export interface SbDownload {
   parts: string[]; // absolute part URLs (manifest first) — NOT persisted (rebuilt on resume)
   partsTotal: number; // persisted count for % display (parts array is stripped on save)
   partsDone: number;
+  /** Notes + DPP PDFs bundled with this lecture (persisted). */
+  docs?: SbDoc[];
+  docsDone?: number;
   sizeBytes: number;
   status: SbDownloadStatus;
   error?: string;
@@ -65,6 +77,8 @@ export interface DownloadStartSpec {
   url: string;
   clearKeys: Record<string, string> | null;
   poster: string;
+  /** Notes + DPP PDFs to bundle with the lecture (relay URLs). */
+  docs?: SbDoc[];
 }
 
 const DB_NAME = 'sb-offline';
@@ -604,6 +618,8 @@ export async function startDownload(spec: DownloadStartSpec): Promise<SbDownload
       parts: [],
       partsTotal: 0,
       partsDone: 0,
+      docs: spec.docs || [],
+      docsDone: 0,
       sizeBytes: 0,
       status: 'collecting',
       error: undefined,
@@ -619,6 +635,9 @@ export async function startDownload(spec: DownloadStartSpec): Promise<SbDownload
       parts: [],
       partsTotal: existing.partsTotal || existing.parts.length,
       partsDone: existing.partsDone || 0,
+      // keep the already-bundled docs (they may be half-downloaded)
+      docs: existing.docs && existing.docs.length > 0 ? existing.docs : spec.docs || [],
+      docsDone: existing.docsDone || 0,
       updatedAt: now,
     };
   } else if (existing) {
@@ -630,6 +649,8 @@ export async function startDownload(spec: DownloadStartSpec): Promise<SbDownload
       parts: [],
       partsTotal: 0,
       partsDone: 0,
+      docs: spec.docs && spec.docs.length > 0 ? spec.docs : existing.docs || [],
+      docsDone: 0,
       sizeBytes: 0,
       height: null,
       status: 'collecting',
@@ -679,7 +700,34 @@ async function runDownload(rec: SbDownload, ctrl: AbortController): Promise<void
     if (!('caches' in window)) throw new Error('Cache API unavailable in this browser');
     const cache = await caches.open(videoCacheName(rec.folder));
 
-    // ---- 2. download pool ----
+    // ---- 2. notes & DPP PDFs — small files, fetched FIRST so they are
+    //         usable even if the big video download is paused or never
+    //         finishes. A missing PDF never blocks the lecture itself. ----
+    const docs = rec.docs || [];
+    if (docs.length > 0) {
+      rec.docsDone = 0;
+      await putDownload(rec);
+      notifyChange();
+      for (const d of docs) {
+        if (ctrl.signal.aborted) return;
+        try {
+          const hit = await cache.match(d.url); // already stored on resume
+          if (!hit) {
+            const res = await fetch(d.url, { signal: ctrl.signal });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const buf = await res.arrayBuffer();
+            await cache.put(d.url, new Response(buf, { headers: pickHeaders(res) }));
+          }
+          rec.docsDone = (rec.docsDone || 0) + 1;
+          await putDownload(rec);
+          notifyChange();
+        } catch {
+          // one unreachable note/DPP must not fail the lecture download
+        }
+      }
+    }
+
+    // ---- 3. download pool ----
     rec.status = 'downloading';
     await putDownload(rec);
     notifyChange();

@@ -95,6 +95,12 @@ export default function StudyBisonApp() {
   const [downloads, setDownloads] = useState<SbDownload[]>([]);
   const [storageEst, setStorageEst] = useState<{ usage: number; quota: number } | null>(null);
 
+  // ---------------- connectivity (offline mode) ----------------
+  const [online, setOnline] = useState(true);
+  const [backOnline, setBackOnline] = useState(false);
+  const onlineRef = useRef(true);
+  const backOnlineTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // ---------------- resources tab ----------------
   const [resourcesTab, setResourcesTab] = useState<'subjects' | 'resources'>('subjects');
   const [resourceTopics, setResourceTopics] = useState<ChapterItemPublic[]>([]);
@@ -152,6 +158,50 @@ export default function StudyBisonApp() {
     } catch {
       /* ignore */
     }
+  }, []);
+
+  // ==================================================================
+  // OFFLINE MODE — Downloads is the default section without a network.
+  // ==================================================================
+  useEffect(() => {
+    const upd = () => {
+      const isOn = navigator.onLine;
+      const was = onlineRef.current;
+      onlineRef.current = isOn;
+      setOnline(isOn);
+      if (!was && isOn) {
+        setBackOnline(true);
+        if (backOnlineTimer.current) clearTimeout(backOnlineTimer.current);
+        backOnlineTimer.current = setTimeout(() => setBackOnline(false), 3200);
+      }
+    };
+    upd(); // after hydration: adopt the real state
+    window.addEventListener('online', upd);
+    window.addEventListener('offline', upd);
+    return () => {
+      window.removeEventListener('online', upd);
+      window.removeEventListener('offline', upd);
+      if (backOnlineTimer.current) clearTimeout(backOnlineTimer.current);
+    };
+  }, []);
+
+  // App opened while offline → land on the Downloads section.
+  useEffect(() => {
+    if (!navigator.onLine) {
+      setView('downloads-view');
+      setSidebarOpen(false);
+    }
+  }, []);
+
+  // Losing the connection mid-session → leave the network-bound catalog
+  // (home) and drop the user on Downloads; cached views keep their content.
+  useEffect(() => {
+    const goOffline = () => {
+      setView((cur) => (cur === 'home-view' ? 'downloads-view' : cur));
+      window.scrollTo(0, 0);
+    };
+    window.addEventListener('offline', goOffline);
+    return () => window.removeEventListener('offline', goOffline);
   }, []);
 
   const playDownload = useCallback((rec: SbDownload) => {
@@ -652,6 +702,23 @@ export default function StudyBisonApp() {
         </div>
       </header>
 
+      {/* ================= OFFLINE WARNING / BACK-ONLINE CHIP ================= */}
+      {!online ? (
+        <div className="offline-banner" role="status" aria-live="polite">
+          <i className="fas fa-plane-up" aria-hidden="true"></i>
+          <div className="ob-text">
+            <b>You&apos;re offline</b>
+            <span>Watch downloaded lectures and study your enrolled batches — everything you saved is still here.</span>
+          </div>
+          <button onClick={() => nav('downloads-view')} aria-label="Open Downloads">Downloads</button>
+        </div>
+      ) : null}
+      {backOnline ? (
+        <div className="online-chip" role="status">
+          <i className="fas fa-circle-check"></i> Back online
+        </div>
+      ) : null}
+
       <div id="app-container">
         {/* ================= HOME VIEW ================= */}
         <div id="home-view" className={`view-section ${view === 'home-view' ? 'active-view' : ''}`}>
@@ -673,7 +740,29 @@ export default function StudyBisonApp() {
           </div>
           <div className="container px-4 pb-5">
             {catalogError ? (
-              <div className="text-center p-5 text-muted">{catalogError}</div>
+              <div className="text-center p-5 text-muted">
+                {online ? (
+                  <>
+                    <i className="fas fa-triangle-exclamation fa-2x mb-3" style={{ display: 'block' }}></i>
+                    {catalogError}
+                  </>
+                ) : (
+                  <>
+                    <i className="fas fa-plane-up fa-2x mb-3" style={{ display: 'block' }}></i>
+                    <h6 style={{ fontWeight: 700, color: 'var(--sb-text-dark)' }}>You&apos;re offline</h6>
+                    <p style={{ fontSize: '0.85rem' }}>
+                      Downloaded lectures and your enrolled batches are still available.
+                    </p>
+                    <button
+                      className="btn btn-sb-dark"
+                      style={{ width: 'auto', padding: '10px 28px', borderRadius: 30 }}
+                      onClick={() => nav('downloads-view')}
+                    >
+                      <i className="fas fa-download me-2"></i> Open Downloads
+                    </button>
+                  </>
+                )}
+              </div>
             ) : null}
             {!searching && batches.length === 0 && !catalogError ? (
               <div className="text-center p-5 text-muted">
@@ -722,7 +811,8 @@ export default function StudyBisonApp() {
             <div>
               <h5 style={{ fontWeight: 800, margin: 0 }}>Offline Lectures</h5>
               <p style={{ fontSize: '0.78rem', color: 'var(--sb-text-muted)', margin: '3px 0 0' }}>
-                Download any lecture from the player (⋮ → Download) and watch it without internet.
+                Download any lecture from the player (⋮ → Download) — the video comes with its
+                <b> Notes &amp; DPP PDFs</b> so you can study fully offline.
                 Unlimited downloads — limited only by your device storage.
               </p>
             </div>
@@ -779,6 +869,12 @@ export default function StudyBisonApp() {
                               <span className="dl-tag">{formatBytes(rec.sizeBytes)}</span>
                               {rec.height ? <span className="dl-tag">{rec.height}p</span> : null}
                               <span className="dl-tag">{rec.kind.toUpperCase()}</span>
+                              {rec.docs && rec.docs.length > 0 ? (
+                                <span className="dl-tag dl-tag-docs">
+                                  <i className="fas fa-file-pdf"></i>{' '}
+                                  {rec.docs.filter((d) => d.kind === 'note').length} Notes · {rec.docs.filter((d) => d.kind === 'dpp').length} DPPs
+                                </span>
+                              ) : null}
                             </div>
                             {isActive || rec.status === 'paused' ? (
                               <div className="dl-bar" style={{ marginTop: 8 }}>

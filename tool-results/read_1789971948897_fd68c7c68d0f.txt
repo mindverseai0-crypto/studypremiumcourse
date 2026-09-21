@@ -1,0 +1,811 @@
+     1→     1→// ============================================================================
+     2→     2→// Study Bison — offline lecture library (PWA downloads).
+     3→     3→//
+     4→     4→// YouTube-style "Available offline": every lecture can be downloaded once and
+     5→     5→// then watched with the network fully off. Media bytes live in the Cache API
+     6→     6→// (one cache per lecture folder: `sb-video-<folder>`) and are served by the
+     7→     7→// service worker (public/sw.js) even when the device is offline.
+     8→     8→//
+     9→     9→// Flow:
+    10→    10→//   1. The player resolves the playable relay URL (/api/pw/<folder>/s/<sig>/…)
+    11→    11→//      — all segment URIs are same-origin and signed statelessly in the PATH,
+    12→    12→//      so they stay byte-identical between download time and offline playback.
+    13→    13→//   2. collectParts() walks the manifest (shaka headless for DASH, a text
+    14→    14→//      parser for HLS) and returns the full part list for ONE good quality.
+    15→    15→//   3. startDownload() fetches every part (concurrency 4, resume-safe) and
+    16→    16→//      cache.put()s it into the lecture cache. Progress is persisted in
+    17→    17→//      IndexedDB so downloads survive reloads and can be paused/resumed.
+    18→    18→//   4. Offline the player finds the stored record, re-uses the stored
+    19→    19→//      manifest URL + ClearKeys and the SW serves every byte from the cache.
+    20→    20→//
+    21→    21→// There is no artificial cap on the number of downloads — the only limit is
+    22→    22→// the device's own storage quota (we also request persistent storage so the
+    23→    23→// browser's janitor does not evict lectures).
+    24→    24→// ============================================================================
+    25→    25→
+    26→    26→export type SbDownloadStatus = 'collecting' | 'downloading' | 'paused' | 'done' | 'error';
+    27→    27→
+    28→    28→/** One offline lecture. Persisted in IndexedDB store `downloads`. */
+    29→    29→export interface SbDownload {
+    30→    30→  id: string; // stable lecture id (videoId || realVideoId || 'url:<path>')
+    31→    31→  title: string;
+    32→    32→  batchName: string;
+    33→    33→  batchId: string;
+    34→    34→  subjectId: string;
+    35→    35→  schId: string;
+    36→    36→  realVideoId: string;
+    37→    37→  vUrl: string; // raw `vUrl` player param (to rebuild the online player URL)
+    38→    38→  kind: 'dash' | 'hls' | 'mp4';
+    39→    39→  /** URL the OFFLINE player should open (dash master / hls variant / mp4). */
+    40→    40→  url: string;
+    41→    41→  clearKeys: Record<string, string> | null; // DASH ClearKey (kid -> key)
+    42→    42→  poster: string;
+    43→    43→  folder: string; // media folder id — cache name is `sb-video-<folder>`
+    44→    44→  height: number | null; // downloaded video rendition height (null = audio-only/mp4)
+    45→    45→  parts: string[]; // absolute part URLs (manifest first) — NOT persisted (rebuilt on resume)
+    46→    46→  partsTotal: number; // persisted count for % display (parts array is stripped on save)
+    47→    47→  partsDone: number;
+    48→    48→  sizeBytes: number;
+    49→    49→  status: SbDownloadStatus;
+    50→    50→  error?: string;
+    51→    51→  createdAt: string;
+    52→    52→  updatedAt: string;
+    53→    53→}
+    54→    54→
+    55→    55→export interface DownloadStartSpec {
+    56→    56→  id: string;
+    57→    57→  title: string;
+    58→    58→  batchName: string;
+    59→    59→  batchId: string;
+    60→    60→  subjectId: string;
+    61→    61→  schId: string;
+    62→    62→  realVideoId: string;
+    63→    63→  vUrl: string;
+    64→    64→  kind: 'dash' | 'hls' | 'mp4';
+    65→    65→  url: string;
+    66→    66→  clearKeys: Record<string, string> | null;
+    67→    67→  poster: string;
+    68→    68→}
+    69→    69→
+    70→    70→const DB_NAME = 'sb-offline';
+    71→    71→const DB_VERSION = 1;
+    72→    72→const STORE = 'downloads';
+    73→    73→const CHANGE_EVENT = 'sb-downloads-changed';
+    74→    74→
+    75→    75→export function videoCacheName(folder: string): string {
+    76→    76→  return `sb-video-${folder}`;
+    77→    77→}
+    78→    78→
+    79→    79→/** Extract the media folder id from a relay/CloudFront media URL. */
+    80→    80→export function folderFromMediaUrl(url: string): string {
+    81→    81→  try {
+    82→    82→    const u = new URL(url, typeof location !== 'undefined' ? location.href : 'https://x.invalid');
+    83→    83→    if (u.origin === location.origin) {
+    84→    84→      // /api/pw/<folder>/…  |  /api/pw/h/<host>/<folder>/…  |  /api/pw/<folder>/s/<sig>/…
+    85→    85→      const m = u.pathname.match(/^\/api\/pw\/(?:h\/[^/]+\/)?([^/]+)\//);
+    86→    86→      return m ? m[1] : '';
+    87→    87→    }
+    88→    88→    if (/\.cloudfront\.net$/i.test(u.hostname)) {
+    89→    89→      const m = u.pathname.match(/^\/([^/]+)\//);
+    90→    90→      return m ? m[1] : '';
+    91→    91→    }
+    92→    92→  } catch {
+    93→    93→    /* ignore */
+    94→    94→  }
+    95→    95→  return '';
+    96→    96→}
+    97→    97→
+    98→    98→// ---------------------------------------------------------------------------
+    99→    99→// IndexedDB plumbing
+   100→   100→// ---------------------------------------------------------------------------
+   101→   101→
+   102→   102→let dbPromise: Promise<IDBDatabase> | null = null;
+   103→   103→
+   104→   104→function openDb(): Promise<IDBDatabase> {
+   105→   105→  if (dbPromise) return dbPromise;
+   106→   106→  dbPromise = new Promise((resolve, reject) => {
+   107→   107→    try {
+   108→   108→      const req = indexedDB.open(DB_NAME, DB_VERSION);
+   109→   109→      req.onupgradeneeded = () => {
+   110→   110→        const db = req.result;
+   111→   111→        if (!db.objectStoreNames.contains(STORE)) {
+   112→   112→          db.createObjectStore(STORE, { keyPath: 'id' });
+   113→   113→        }
+   114→   114→      };
+   115→   115→      req.onsuccess = () => resolve(req.result);
+   116→   116→      req.onerror = () => reject(req.error || new Error('IndexedDB unavailable'));
+   117→   117→    } catch (e) {
+   118→   118→      reject(e instanceof Error ? e : new Error('IndexedDB unavailable'));
+   119→   119→    }
+   120→   120→  });
+   121→   121→  return dbPromise;
+   122→   122→}
+   123→   123→
+   124→   124→async function tx<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+   125→   125→  const db = await openDb();
+   126→   126→  return new Promise<T>((resolve, reject) => {
+   127→   127→    const t = db.transaction(STORE, mode);
+   128→   128→    const req = fn(t.objectStore(STORE));
+   129→   129→    req.onsuccess = () => resolve(req.result);
+   130→   130→    req.onerror = () => reject(req.error || new Error('IndexedDB error'));
+   131→   131→  });
+   132→   132→}
+   133→   133→
+   134→   134→function notifyChange() {
+   135→   135→  try {
+   136→   136→    window.dispatchEvent(new CustomEvent(CHANGE_EVENT));
+   137→   137→  } catch {
+   138→   138→    /* ignore */
+   139→   139→  }
+   140→   140→}
+   141→   141→
+   142→   142→/** Subscribe to download-library changes. Returns an unsubscribe fn. */
+   143→   143→export function subscribeDownloads(cb: () => void): () => void {
+   144→   144→  window.addEventListener(CHANGE_EVENT, cb);
+   145→   145→  window.addEventListener('online', cb);
+   146→   146→  window.addEventListener('offline', cb);
+   147→   147→  return () => {
+   148→   148→    window.removeEventListener(CHANGE_EVENT, cb);
+   149→   149→    window.removeEventListener('online', cb);
+   150→   150→    window.removeEventListener('offline', cb);
+   151→   151→  };
+   152→   152→}
+   153→   153→
+   154→   154→export async function listDownloads(): Promise<SbDownload[]> {
+   155→   155→  try {
+   156→   156→    const all = await tx<SbDownload[]>('readonly', (s) => s.getAll() as IDBRequest<SbDownload[]>);
+   157→   157→    return (all || []).sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+   158→   158→  } catch {
+   159→   159→    return [];
+   160→   160→  }
+   161→   161→}
+   162→   162→
+   163→   163→export async function getDownload(id: string): Promise<SbDownload | null> {
+   164→   164→  try {
+   165→   165→    const rec = await tx<SbDownload | undefined>('readonly', (s) => s.get(id) as IDBRequest<SbDownload | undefined>);
+   166→   166→    return rec || null;
+   167→   167→  } catch {
+   168→   168→    return null;
+   169→   169→  }
+   170→   170→}
+   171→   171→
+   172→   172→async function putDownload(rec: SbDownload): Promise<void> {
+   173→   173→  rec.updatedAt = new Date().toISOString();
+   174→   174→  // Persist WITHOUT the parts array: a 2-hour lecture carries thousands of
+   175→   175→  // ~100-char URLs (~0.5MB per save × every 5 parts ≈ 100s of MB of IndexedDB
+   176→   176→  // writes per download — a real throughput killer). The part list lives in
+   177→   177→  // memory while running and is re-collected from the stored manifest on
+   178→   178→  // resume (same sig → same URIs → cached parts still match).
+   179→   179→  const slim: SbDownload = { ...rec, parts: [] };
+   180→   180→  await tx('readwrite', (s) => s.put(slim) as IDBRequest<IDBValidKey>);
+   181→   181→}
+   182→   182→
+   183→   183→// ---------------------------------------------------------------------------
+   184→   184→// Change lookup / storage
+   185→   185→// ---------------------------------------------------------------------------
+   186→   186→
+   187→   187→/** Find the download record matching a lecture (by id candidates or vUrl). */
+   188→   188→export async function findDownloadFor(ids: {
+   189→   189→  videoId?: string;
+   190→   190→  realVideoId?: string;
+   191→   191→  vUrl?: string;
+   192→   192→}): Promise<SbDownload | null> {
+   193→   193→  const cands = new Set<string>();
+   194→   194→  if (ids.videoId) cands.add(ids.videoId);
+   195→   195→  if (ids.realVideoId) cands.add(ids.realVideoId);
+   196→   196→  if (ids.vUrl) {
+   197→   197→    cands.add(`url:${ids.vUrl.split('?')[0]}`);
+   198→   198→    cands.add(ids.vUrl);
+   199→   199→  }
+   200→   200→  if (cands.size === 0) return null;
+   201→   201→  const all = await listDownloads();
+   202→   202→  for (const rec of all) {
+   203→   203→    if (cands.has(rec.id) || (ids.vUrl && rec.vUrl && rec.vUrl === ids.vUrl)) return rec;
+   204→   204→  }
+   205→   205→  return null;
+   206→   206→}
+   207→   207→
+   208→   208→/** Rough storage usage of the whole origin (all caches + IDB). */
+   209→   209→export async function estimateOfflineStorage(): Promise<{ usage: number; quota: number }> {
+   210→   210→  try {
+   211→   211→    const est = await navigator.storage.estimate();
+   212→   212→    return { usage: est.usage || 0, quota: est.quota || 0 };
+   213→   213→  } catch {
+   214→   214→    return { usage: 0, quota: 0 };
+   215→   215→  }
+   216→   216→}
+   217→   217→
+   218→   218→/** Ask the browser to keep our storage (no auto eviction). Best-effort. */
+   219→   219→export async function ensurePersistentStorage(): Promise<boolean> {
+   220→   220→  try {
+   221→   221→    if (navigator.storage && navigator.storage.persist) {
+   222→   222→      if (await navigator.storage.persisted()) return true;
+   223→   223→      return await navigator.storage.persist();
+   224→   224→    }
+   225→   225→  } catch {
+   226→   226→    /* ignore */
+   227→   227→  }
+   228→   228→  return false;
+   229→   229→}
+   230→   230→
+   231→   231→// ---------------------------------------------------------------------------
+   232→   232→// Manifest → part list
+   233→   233→// ---------------------------------------------------------------------------
+   234→   234→
+   235→   235→export interface CollectedParts {
+   236→   236→  parts: string[];
+   237→   237→  height: number | null;
+   238→   238→  /** What the OFFLINE player should open. */
+   239→   239→  playbackUrl: string;
+   240→   240→}
+   241→   241→
+   242→   242→function uniqKeepOrder(items: string[]): string[] {
+   243→   243→  const seen = new Set<string>();
+   244→   244→  const out: string[] = [];
+   245→   245→  for (const u of items) {
+   246→   246→    if (!u || seen.has(u)) continue;
+   247→   247→    seen.add(u);
+   248→   248→    out.push(u);
+   249→   249→  }
+   250→   250→  return out;
+   251→   251→}
+   252→   252→
+   253→   253→async function fetchText(url: string): Promise<string> {
+   254→   254→  const res = await fetch(url);
+   255→   255→  if (!res.ok) throw new Error(`HTTP ${res.status} for playlist`);
+   256→   256→  return res.text();
+   257→   257→}
+   258→   258→
+   259→   259→/**
+   260→   260→ * HLS — relay playlists are fully rewritten (absolute same-origin URIs), so a
+   261→   261→ * plain text walk is exact. For a master playlist we pick ONE rendition
+   262→   262→ * (≤720p, highest bitrate) and download only that media playlist + its
+   263→   263→ * segments — the offline player opens the variant playlist directly.
+   264→   264→ */
+   265→   265→async function collectHlsParts(url: string, depth = 0): Promise<CollectedParts> {
+   266→   266→  // absolutize (input may be a same-origin relative path like /e2ehls/main.m3u8)
+   267→   267→  const absUrl = new URL(url, location.href).href;
+   268→   268→  const text = await fetchText(absUrl);
+   269→   269→  const lines = text.split('\n').map((l) => l.trim());
+   270→   270→
+   271→   271→  // master playlist? → choose one variant
+   272→   272→  const variants: Array<{ url: string; bandwidth: number; height: number }> = [];
+   273→   273→  for (let i = 0; i < lines.length; i++) {
+   274→   274→    if (!/^#EXT-X-STREAM-INF/i.test(lines[i])) continue;
+   275→   275→    const attrs = lines[i].slice(lines[i].indexOf(':') + 1);
+   276→   276→    const res = /RESOLUTION=(\d+)x(\d+)/i.exec(attrs);
+   277→   277→    const bw = /BANDWIDTH=(\d+)/i.exec(attrs);
+   278→   278→    let j = i + 1;
+   279→   279→    while (j < lines.length && (!lines[j] || lines[j].startsWith('#'))) j++;
+   280→   280→    if (j < lines.length) {
+   281→   281→      variants.push({
+   282→   282→        url: new URL(lines[j], absUrl).href,
+   283→   283→        bandwidth: bw ? Number(bw[1]) || 0 : 0,
+   284→   284→        height: res ? Number(res[2]) || 0 : 0,
+   285→   285→      });
+   286→   286→    }
+   287→   287→  }
+   288→   288→
+   289→   289→  let playlistUrl = absUrl;
+   290→   290→  let height: number | null = null;
+   291→   291→  if (variants.length > 0) {
+   292→   292→    const capped = variants.filter((v) => v.height > 0 && v.height <= 720);
+   293→   293→    const best =
+   294→   294→      capped.sort((a, b) => b.bandwidth - a.bandwidth)[0] ||
+   295→   295→      variants.slice().sort((a, b) => a.bandwidth - b.bandwidth)[0];
+   296→   296→    playlistUrl = best.url;
+   297→   297→    height = best.height || null;
+   298→   298→  }
+   299→   299→
+   300→   300→  const mediaText = playlistUrl === absUrl ? text : await fetchText(playlistUrl);
+   301→   301→  const mediaLines = mediaText.split('\n').map((l) => l.trim());
+   302→   302→
+   303→   303→  // defensive: a variant that is itself still a master (depth guard = 2)
+   304→   304→  if (depth < 2 && mediaLines.some((l) => /^#EXT-X-STREAM-INF/i.test(l))) {
+   305→   305→    return collectHlsParts(playlistUrl, depth + 1);
+   306→   306→  }
+   307→   307→
+   308→   308→  const parts: string[] = [playlistUrl];
+   309→   309→  for (const l of mediaLines) {
+   310→   310→    if (!l) continue;
+   311→   311→    if (l.startsWith('#')) {
+   312→   312→      if (/^#EXT-X-(KEY|MAP|MEDIA|SESSION-KEY)/i.test(l)) {
+   313→   313→        const m = /URI="([^"]+)"/i.exec(l);
+   314→   314→        if (m) parts.push(new URL(m[1], playlistUrl).href);
+   315→   315→      }
+   316→   316→      continue;
+   317→   317→    }
+   318→   318→    parts.push(new URL(l, playlistUrl).href);
+   319→   319→  }
+   320→   320→  return { parts: uniqKeepOrder(parts), height, playbackUrl: playlistUrl };
+   321→   321→}
+   322→   322→
+   323→   323→/** Cheap ranged probe — verifies a URL is actually fetchable (200/206). */
+   324→   324→async function probePart(u: string, timeoutMs = 8000): Promise<boolean> {
+   325→   325→  try {
+   326→   326→    const ctrl = new AbortController();
+   327→   327→    const t = setTimeout(() => ctrl.abort(), timeoutMs);
+   328→   328→    const res = await fetch(u, { headers: { Range: 'bytes=0-1' }, signal: ctrl.signal });
+   329→   329→    clearTimeout(t);
+   330→   330→    return res.status < 400;
+   331→   331→  } catch {
+   332→   332→    return false;
+   333→   333→  }
+   334→   334→}
+   335→   335→
+   336→   336→/** Verify the collected list: probe the manifest + the first media segment. */
+   337→   337→async function probeCollected(parts: string[]): Promise<boolean> {
+   338→   338→  if (parts.length === 0) return false;
+   339→   339→  if (!(await probePart(parts[0]))) return false;
+   340→   340→  // find the first non-init part (the first real media segment)
+   341→   341→  const seg = parts.slice(1).find((u) => !/init\.(mp4|m4s)$/i.test(u.split('?')[0]));
+   342→   342→  if (!seg) return true; // playlist-only download
+   343→   343→  return probePart(seg);
+   344→   344→}
+   345→   345→
+   346→   346→/**
+   347→   347→ * DASH via shaka headless (no <video>): parse the MPD and walk the chosen
+   348→   348→ * variant's SegmentReferences. NOTE: some shaka versions substitute $Number$
+   349→   349→ * with time values when a SegmentTimeline is present — every collected list
+   350→   350→ * is therefore probe-verified by the caller before use.
+   351→   351→ */
+   352→   352→async function collectDashShaka(url: string, clearKeys: Record<string, string> | null): Promise<CollectedParts> {
+   353→   353→  const shaka = (await import('shaka-player')).default;
+   354→   354→  shaka.polyfill.installAll();
+   355→   355→  const player = new shaka.Player();
+   356→   356→  player.configure({
+   357→   357→    manifest: {
+   358→   358→      dash: { ignoreDrmInfo: true }, // we store encrypted bytes; keys only matter at playback
+   359→   359→      retryParameters: { timeout: 20000, maxAttempts: 3 },
+   360→   360→    },
+   361→   361→  });
+   362→   362→  try {
+   363→   363→    await player.load(url, 0, 'application/dash+xml');
+   364→   364→    const manifest = player.getManifest();
+   365→   365→    if (!manifest) throw new Error('Manifest did not parse');
+   366→   366→    const variants = manifest.variants.filter((v) => v.video);
+   367→   367→    if (variants.length === 0) throw new Error('No video variants in manifest');
+   368→   368→
+   369→   369→    // pick ≤720p with the highest bitrate (fallback: the smallest available)
+   370→   370→    const capped = variants.filter((v) => (v.video?.height || 0) > 0 && (v.video?.height || 0) <= 720);
+   371→   371→    const chosen =
+   372→   372→      capped.sort((a, b) => (b.bandwidth || 0) - (a.bandwidth || 0))[0] ||
+   373→   373→      variants.slice().sort((a, b) => (a.video?.height || 4320) - (b.video?.height || 4320))[0] ||
+   374→   374→      variants[0];
+   375→   375→
+   376→   376→    const height = chosen.video?.height || null;
+   377→   377→    const parts: string[] = [];
+   378→   378→    const seenStreams = new Set<number>();
+   379→   379→    const streams = [chosen.video, chosen.audio].filter(Boolean) as NonNullable<typeof chosen.video | typeof chosen.audio>[];
+   380→   380→    for (const stream of streams) {
+   381→   381→      if (seenStreams.has(stream.id)) continue;
+   382→   382→      seenStreams.add(stream.id);
+   383→   383→      try {
+   384→   384→        await stream.createSegmentIndex();
+   385→   385→      } catch {
+   386→   386→        /* already created */
+   387→   387→      }
+   388→   388→      const segIndex = stream.segmentIndex;
+   389→   389→      if (!segIndex) continue;
+   390→   390→      for (const ref of segIndex) {
+   391→   391→        if (!ref) continue;
+   392→   392→        try {
+   393→   393→          const init = ref.initSegmentReference;
+   394→   394→          if (init) {
+   395→   395→            for (const u of init.getUris()) parts.push(u);
+   396→   396→          }
+   397→   397→          for (const u of ref.getUris()) parts.push(u);
+   398→   398→        } catch {
+   399→   399→          /* skip broken reference */
+   400→   400→        }
+   401→   401→      }
+   402→   402→    }
+   403→   403→    if (parts.length === 0) throw new Error('No segments found in manifest');
+   404→   404→    return { parts: uniqKeepOrder(parts), height, playbackUrl: url };
+   405→   405→  } finally {
+   406→   406→    try {
+   407→   407→      await player.destroy();
+   408→   408→    } catch {
+   409→   409→      /* ignore */
+   410→   410→    }
+   411→   411→  }
+   412→   412→}
+   413→   413→
+   414→   414→/**
+   415→   415→ * MPD parser (primary DASH path) — handles SegmentTemplate with $Number$
+   416→   416→ * (+ SegmentTimeline or @duration) and $Time$, SegmentList and plain BaseURL
+   417→   417→ * representations, per the DASH spec ($Number$ = segment sequence number).
+   418→   418→ */
+   419→   419→async function collectDashText(url: string): Promise<CollectedParts> {
+   420→   420→  const xml = new DOMParser().parseFromString(await fetchText(url), 'application/xml');
+   421→   421→  const q = (el: Element | Document, name: string): Element | null => {
+   422→   422→    const list = (el as Element).getElementsByTagName(name);
+   423→   423→    return list.length ? list[0] : null;
+   424→   424→  };
+   425→   425→  const txt = (el: Element, name: string): string => {
+   426→   426→    const n = q(el, name);
+   427→   427→    return n && n.textContent ? n.textContent.trim() : '';
+   428→   428→  };
+   429→   429→  const num = (el: Element, name: string): number => Number(el.getAttribute(name) || 0);
+   430→   430→  const attr = (el: Element, name: string): string => el.getAttribute(name) || '';
+   431→   431→
+   432→   432→  const resolve = (base: string, uri: string): string => new URL(uri, new URL(base, location.href)).href;
+   433→   433→
+   434→   434→  const mpdBase = txt(xml, 'BaseURL') ? resolve(url, txt(xml, 'BaseURL')) : url;
+   435→   435→  const isoDuration = attr(xml.getElementsByTagName('MPD')[0] || xml.documentElement, 'mediaPresentationDuration');
+   436→   436→  const totalSec = (() => {
+   437→   437→    const m = /^P(?:(\d+(?:\.\d+)?)Y)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)D)?(?:T(?:(\d+(?:\.\d+)?)H)?(?:(\d+(?:\.\d+)?)M)?(?:(\d+(?:\.\d+)?)S)?)?$/.exec(isoDuration);
+   438→   438→    if (!m) return 0;
+   439→   439→    return (Number(m[4]) || 0) * 3600 + (Number(m[5]) || 0) * 60 + (Number(m[6]) || 0);
+   440→   440→  })();
+   441→   441→
+   442→   442→  const videoReps: Array<{ el: Element; base: string; height: number; bandwidth: number }> = [];
+   443→   443→  const audioReps: Array<{ el: Element; base: string }> = [];
+   444→   444→  for (const aset of Array.from(xml.getElementsByTagName('AdaptationSet'))) {
+   445→   445→    const asBase = txt(aset, 'BaseURL') ? resolve(mpdBase, txt(aset, 'BaseURL')) : mpdBase;
+   446→   446→    const contentType = (attr(aset, 'contentType') || attr(aset, 'mimeType')).toLowerCase();
+   447→   447→    const isAudio = /audio/.test(contentType);
+   448→   448→    for (const rep of Array.from(aset.getElementsByTagName('Representation'))) {
+   449→   449→      const repBase = txt(rep, 'BaseURL') ? resolve(asBase, txt(rep, 'BaseURL')) : asBase;
+   450→   450→      if (isAudio || /audio/.test(attr(rep, 'mimeType').toLowerCase())) {
+   451→   451→        audioReps.push({ el: rep, base: repBase });
+   452→   452→      } else {
+   453→   453→        videoReps.push({ el: rep, base: repBase, height: num(rep, 'height'), bandwidth: num(rep, 'bandwidth') });
+   454→   454→      }
+   455→   455→    }
+   456→   456→  }
+   457→   457→  if (videoReps.length === 0) throw new Error('No representations found');
+   458→   458→
+   459→   459→  const capped = videoReps.filter((r) => r.height > 0 && r.height <= 720);
+   460→   460→  const chosen =
+   461→   461→    capped.sort((a, b) => b.bandwidth - a.bandwidth)[0] ||
+   462→   462→    videoReps.slice().sort((a, b) => a.height - b.height)[0];
+   463→   463→  const height = chosen.height || null;
+   464→   464→
+   465→   465→  const expandRep = (rep: Element, base: string, out: string[]) => {
+   466→   466→    const repBase = txt(rep, 'BaseURL') ? resolve(base, txt(rep, 'BaseURL')) : base;
+   467→   467→    const aset = rep.parentElement as Element | null;
+   468→   468→    const tmpl = (q(rep, 'SegmentTemplate') as Element | null) || (aset ? q(aset, 'SegmentTemplate') : null);
+   469→   469→    if (tmpl) {
+   470→   470→      const mediaT = attr(tmpl, 'media');
+   471→   471→      const initT = attr(tmpl, 'initialization');
+   472→   472→      const timescale = num(tmpl, 'timescale') || 1;
+   473→   473→      const segDur = num(tmpl, 'duration') / timescale;
+   474→   474→      const startNumber = num(tmpl, 'startNumber') || (/\$Number%0(\d+)d\$/.test(mediaT) ? 1 : 0);
+   475→   475→      const repId = attr(rep, 'id');
+   476→   476→      const bandwidth = attr(rep, 'bandwidth');
+   477→   477→      const fill = (t: string): string =>
+   478→   478→        t
+   479→   479→          .replace(/\$RepresentationID\$/g, repId)
+   480→   480→          .replace(/\$Bandwidth\$/g, bandwidth)
+   481→   481→          .replace(/\$\$/g, '$');
+   482→   482→      if (initT) out.push(resolve(repBase, fill(initT)));
+   483→   483→      const timeline = q(tmpl, 'SegmentTimeline');
+   484→   484→      if (timeline) {
+   485→   485→        let t = 0;
+   486→   486→        let segIdx = 0;
+   487→   487→        for (const s of Array.from(timeline.getElementsByTagName('S'))) {
+   488→   488→          const st = s.getAttribute('t');
+   489→   489→          if (st !== null) t = Number(st);
+   490→   490→          const d = Number(s.getAttribute('d') || 0);
+   491→   491→          const r = Number(s.getAttribute('r') || 0);
+   492→   492→          for (let i = 0; i <= Math.max(0, r); i++) {
+   493→   493→            // $Number$ = sequence number (startNumber + index), $Time$ = media time
+   494→   494→            const filled = fill(mediaT)
+   495→   495→              .replace(/\$Number(?:%0(\d+)d)?\$/g, (_m, pad?: string) => String(startNumber + segIdx).padStart(pad ? Number(pad) : 0, '0'))
+   496→   496→              .replace(/\$Time\$/g, String(t));
+   497→   497→            out.push(resolve(repBase, filled));
+   498→   498→            segIdx++;
+   499→   499→            t += d;
+   500→   500→          }
+   501→   501→        }
+   502→   502→      } else if (segDur > 0 && totalSec > 0) {
+   503→   503→        const count = Math.ceil(totalSec / segDur);
+   504→   504→        for (let i = 0; i < count; i++) {
+   505→   505→          out.push(resolve(repBase, fill(mediaT).replace(/\$Number(?:%0(\d+)d)?\$/g, (_m, pad?: string) => String(startNumber + i).padStart(pad ? Number(pad) : 0, '0'))));
+   506→   506→        }
+   507→   507→      }
+   508→   508→      return;
+   509→   509→    }
+   510→   510→    const list = q(rep, 'SegmentList') || (aset ? q(aset, 'SegmentList') : null);
+   511→   511→    if (list) {
+   512→   512→      const initEl = q(list, 'Initialization');
+   513→   513→      if (initEl) {
+   514→   514→        const src = attr(initEl, 'sourceURL');
+   515→   515→        if (src) out.push(resolve(repBase, src));
+   516→   516→      }
+   517→   517→      for (const su of Array.from(list.getElementsByTagName('SegmentURL'))) {
+   518→   518→        const media = attr(su, 'media');
+   519→   519→        if (media) out.push(resolve(repBase, media));
+   520→   520→      }
+   521→   521→      return;
+   522→   522→    }
+   523→   523→    // plain <BaseURL> representation (single self-contained file)
+   524→   524→    const single = txt(rep, 'BaseURL');
+   525→   525→    if (single) out.push(resolve(base, single));
+   526→   526→  };
+   527→   527→
+   528→   528→  const parts: string[] = [url];
+   529→   529→  expandRep(chosen.el, chosen.base, parts);
+   530→   530→  for (const a of audioReps.slice(0, 2)) expandRep(a.el, a.base, parts);
+   531→   531→  return { parts: uniqKeepOrder(parts), height, playbackUrl: url };
+   532→   532→}
+   533→   533→
+   534→   534→async function collectParts(kind: 'dash' | 'hls' | 'mp4', url: string, clearKeys: Record<string, string> | null): Promise<CollectedParts> {
+   535→   535→  if (kind === 'mp4') return { parts: [url], height: null, playbackUrl: url };
+   536→   536→  if (kind === 'hls') return collectHlsParts(url);
+   537→   537→  // DASH: spec-correct MPD parser first, then probe-verify. Some shaka
+   538→   538→  // builds mis-substitute $Number$ on timelines — only trust a part list
+   539→   539→  // whose first segment actually fetches. If the parser fails, try the
+   540→   540→  // shaka walk (also probe-verified), then fall back to whichever parsed.
+   541→   541→  let textParts: CollectedParts | null = null;
+   542→   542→  try {
+   543→   543→    textParts = await collectDashText(url);
+   544→   544→  } catch {
+   545→   545→    textParts = null;
+   546→   546→  }
+   547→   547→  if (textParts && textParts.parts.length > 1 && (await probeCollected(textParts.parts))) {
+   548→   548→    return textParts;
+   549→   549→  }
+   550→   550→  try {
+   551→   551→    const shakaParts = await collectDashShaka(url, clearKeys);
+   552→   552→    if (shakaParts.parts.length > 1 && (await probeCollected(shakaParts.parts))) {
+   553→   553→      return shakaParts;
+   554→   554→    }
+   555→   555→  } catch {
+   556→   556→    /* fall through */
+   557→   557→  }
+   558→   558→  if (textParts && textParts.parts.length > 1) return textParts;
+   559→   559→  throw new Error('Could not read the lecture manifest (segments unreachable).');
+   560→   560→}
+   561→   561→
+   562→   562→// ---------------------------------------------------------------------------
+   563→   563→// Download engine
+   564→   564→// ---------------------------------------------------------------------------
+   565→   565→
+   566→   566→const CONCURRENCY = 8; // browser→CDN is HTTP/2-multiplexed; 8 lanes ≈ 2× the old 4
+   567→   567→const activeControllers = new Map<string, AbortController>();
+   568→   568→
+   569→   569→function sleep(ms: number): Promise<void> {
+   570→   570→  return new Promise((r) => setTimeout(r, ms));
+   571→   571→}
+   572→   572→
+   573→   573→function pickHeaders(res: Response): Headers {
+   574→   574→  const h = new Headers();
+   575→   575→  const ct = res.headers.get('content-type');
+   576→   576→  if (ct) h.set('Content-Type', ct);
+   577→   577→  h.set('Cache-Control', 'immutable');
+   578→   578→  return h;
+   579→   579→}
+   580→   580→
+   581→   581→/**
+   582→   582→ * Start (or resume) a lecture download. Resolves once the download pipeline
+   583→   583→ * has been kicked off (progress continues in the background — observe via
+   584→   584→ * subscribeDownloads / listDownloads).
+   585→   585→ */
+   586→   586→export async function startDownload(spec: DownloadStartSpec): Promise<SbDownload> {
+   587→   587→  const now = new Date().toISOString();
+   588→   588→  const existing = await getDownload(spec.id);
+   589→   589→  // resumable = a healthy in-flight download — keep its progress; the part
+   590→   590→  // list is re-collected on resume (parts are not persisted), which yields
+   591→   591→  // byte-identical URLs for the already-downloaded parts (same stored sig).
+   592→   592→  const resumable = Boolean(
+   593→   593→    existing &&
+   594→   594→      (existing.parts.length > 0 || existing.partsTotal > 0) &&
+   595→   595→      (existing.status === 'paused' || existing.status === 'downloading' || existing.status === 'collecting'),
+   596→   596→  );
+   597→   597→  let rec: SbDownload;
+   598→   598→  if (!existing || existing.status === 'done') {
+   599→   599→    // brand-new download (or full re-download)
+   600→   600→    rec = {
+   601→   601→      ...spec,
+   602→   602→      folder: folderFromMediaUrl(spec.url) || spec.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40),
+   603→   603→      height: null,
+   604→   604→      parts: [],
+   605→   605→      partsTotal: 0,
+   606→   606→      partsDone: 0,
+   607→   607→      sizeBytes: 0,
+   608→   608→      status: 'collecting',
+   609→   609→      error: undefined,
+   610→   610→      createdAt: existing?.createdAt || now,
+   611→   611→      updatedAt: now,
+   612→   612→    };
+   613→   613→  } else if (resumable && existing) {
+   614→   614→    rec = {
+   615→   615→      ...existing,
+   616→   616→      ...spec,
+   617→   617→      url: existing.url,
+   618→   618→      folder: existing.folder,
+   619→   619→      parts: [],
+   620→   620→      partsTotal: existing.partsTotal || existing.parts.length,
+   621→   621→      partsDone: existing.partsDone || 0,
+   622→   622→      updatedAt: now,
+   623→   623→    };
+   624→   624→  } else if (existing) {
+   625→   625→    // error state — drop the stale part list and re-collect from the source
+   626→   626→    rec = {
+   627→   627→      ...existing,
+   628→   628→      ...spec,
+   629→   629→      folder: folderFromMediaUrl(spec.url) || existing.folder,
+   630→   630→      parts: [],
+   631→   631→      partsTotal: 0,
+   632→   632→      partsDone: 0,
+   633→   633→      sizeBytes: 0,
+   634→   634→      height: null,
+   635→   635→      status: 'collecting',
+   636→   636→      error: undefined,
+   637→   637→      updatedAt: now,
+   638→   638→    };
+   639→   639→  } else {
+   640→   640→    throw new Error('unreachable');
+   641→   641→  }
+   642→   642→
+   643→   643→  if (activeControllers.has(spec.id)) return rec; // already running
+   644→   644→  const ctrl = new AbortController();
+   645→   645→  activeControllers.set(spec.id, ctrl);
+   646→   646→
+   647→   647→  await putDownload(rec);
+   648→   648→  notifyChange();
+   649→   649→
+   650→   650→  // fire-and-forget the heavy lifting
+   651→   651→  void runDownload(rec, ctrl).finally(() => activeControllers.delete(spec.id));
+   652→   652→  return rec;
+   653→   653→}
+   654→   654→
+   655→   655→async function runDownload(rec: SbDownload, ctrl: AbortController): Promise<void> {
+   656→   656→  try {
+   657→   657→    // ---- 1. collect parts (re-collect on resume if we never finished) ----
+   658→   658→    if (rec.parts.length === 0) {
+   659→   659→      rec.status = 'collecting';
+   660→   660→      await putDownload(rec);
+   661→   661→      notifyChange();
+   662→   662→      const collected = await collectParts(rec.kind, rec.url, rec.clearKeys);
+   663→   663→      if (ctrl.signal.aborted) return;
+   664→   664→      rec.parts = collected.parts;
+   665→   665→      rec.partsTotal = collected.parts.length;
+   666→   666→      rec.height = collected.height;
+   667→   667→      rec.url = collected.playbackUrl;
+   668→   668→      // resume: keep progress (cached parts are re-verified cheaply below);
+   669→   669→      // fresh/error re-collect: start from zero
+   670→   670→      if (!rec.partsDone) {
+   671→   671→        rec.partsDone = 0;
+   672→   672→        rec.sizeBytes = 0;
+   673→   673→      }
+   674→   674→      await putDownload(rec);
+   675→   675→      notifyChange();
+   676→   676→    }
+   677→   677→    if (!rec.partsTotal) rec.partsTotal = rec.parts.length;
+   678→   678→
+   679→   679→    if (!('caches' in window)) throw new Error('Cache API unavailable in this browser');
+   680→   680→    const cache = await caches.open(videoCacheName(rec.folder));
+   681→   681→
+   682→   682→    // ---- 2. download pool ----
+   683→   683→    rec.status = 'downloading';
+   684→   684→    await putDownload(rec);
+   685→   685→    notifyChange();
+   686→   686→
+   687→   687→    let next = 0;
+   688→   688→    let done = rec.partsDone;
+   689→   689→    let size = rec.sizeBytes;
+   690→   690→    let failure: Error | null = null;
+   691→   691→    // fresh start: nothing can be cached yet — skip the per-part resume probe
+   692→   692→    const skipResumeMatch = rec.partsDone === 0;
+   693→   693→
+   694→   694→    const grab = async (): Promise<void> => {
+   695→   695→      for (;;) {
+   696→   696→        if (ctrl.signal.aborted || failure) return;
+   697→   697→        const i = next++;
+   698→   698→        if (i >= rec.parts.length) return;
+   699→   699→        const partUrl = rec.parts[i];
+   700→   700→        try {
+   701→   701→          const hit = skipResumeMatch ? null : await cache.match(partUrl); // resume: keep already-cached parts
+   702→   702→          if (hit) {
+   703→   703→            size += Number(hit.headers.get('content-length') || 0);
+   704→   704→          } else {
+   705→   705→            let stored = false;
+   706→   706→            for (let attempt = 0; attempt < 2 && !stored; attempt++) {
+   707→   707→              try {
+   708→   708→                const res = await fetch(partUrl, { signal: ctrl.signal });
+   709→   709→                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+   710→   710→                const buf = await res.arrayBuffer();
+   711→   711→                size += buf.byteLength;
+   712→   712→                await cache.put(partUrl, new Response(buf, { headers: pickHeaders(res) }));
+   713→   713→                stored = true;
+   714→   714→              } catch (e) {
+   715→   715→                if (ctrl.signal.aborted) return;
+   716→   716→                if (attempt === 1) throw e;
+   717→   717→                await sleep(1500); // one soft retry on flaky network
+   718→   718→              }
+   719→   719→            }
+   720→   720→            if (!stored) throw new Error('Fetch failed twice');
+   721→   721→          }
+   722→   722→          done++;
+   723→   723→          if (done % 5 === 0 || done === rec.parts.length) {
+   724→   724→            rec.partsDone = done;
+   725→   725→            rec.sizeBytes = size;
+   726→   726→            await putDownload(rec);
+   727→   727→            notifyChange();
+   728→   728→          }
+   729→   729→        } catch (e) {
+   730→   730→          if (ctrl.signal.aborted) return;
+   731→   731→          failure = e instanceof Error ? e : new Error('Download failed');
+   732→   732→        }
+   733→   733→      }
+   734→   734→    };
+   735→   735→
+   736→   736→    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, rec.parts.length) }, grab));
+   737→   737→
+   738→   738→    if (ctrl.signal.aborted) return;
+   739→   739→    if (failure) throw failure;
+   740→   740→
+   741→   741→    rec.partsDone = rec.parts.length;
+   742→   742→    rec.sizeBytes = size;
+   743→   743→    rec.partsTotal = rec.parts.length;
+   744→   744→    rec.status = 'done';
+   745→   745→    rec.error = undefined;
+   746→   746→    await putDownload(rec);
+   747→   747→    notifyChange();
+   748→   748→    await ensurePersistentStorage();
+   749→   749→  } catch (e) {
+   750→   750→    if (ctrl.signal.aborted) return; // paused — record keeps its state
+   751→   751→    rec.status = 'error';
+   752→   752→    rec.error = e instanceof Error ? e.message : 'Download failed';
+   753→   753→    await putDownload(rec);
+   754→   754→    notifyChange();
+   755→   755→  }
+   756→   756→}
+   757→   757→
+   758→   758→/** Pause an in-flight download (resume later with startDownload). */
+   759→   759→export async function pauseDownload(id: string): Promise<void> {
+   760→   760→  const ctrl = activeControllers.get(id);
+   761→   761→  if (ctrl) {
+   762→   762→    activeControllers.delete(id);
+   763→   763→    ctrl.abort();
+   764→   764→  }
+   765→   765→  const rec = await getDownload(id);
+   766→   766→  if (rec && (rec.status === 'downloading' || rec.status === 'collecting')) {
+   767→   767→    rec.status = 'paused';
+   768→   768→    await putDownload(rec);
+   769→   769→    notifyChange();
+   770→   770→  }
+   771→   771→}
+   772→   772→
+   773→   773→export async function isDownloading(id: string): Promise<boolean> {
+   774→   774→  return activeControllers.has(id);
+   775→   775→}
+   776→   776→
+   777→   777→/** Delete a lecture's offline copy (cache + record). */
+   778→   778→export async function deleteDownload(id: string): Promise<void> {
+   779→   779→  await pauseDownload(id);
+   780→   780→  const rec = await getDownload(id);
+   781→   781→  if (rec) {
+   782→   782→    try {
+   783→   783→      await caches.delete(videoCacheName(rec.folder));
+   784→   784→    } catch {
+   785→   785→      /* ignore */
+   786→   786→    }
+   787→   787→    await tx('readwrite', (s) => s.delete(rec.id) as unknown as IDBRequest<undefined>);
+   788→   788→    notifyChange();
+   789→   789→  }
+   790→   790→}
+   791→   791→
+   792→   792→/** Delete every offline lecture (used by "Clear all"). */
+   793→   793→export async function deleteAllDownloads(): Promise<void> {
+   794→   794→  const all = await listDownloads();
+   795→   795→  for (const rec of all) await deleteDownload(rec.id);
+   796→   796→}
+   797→   797→
+   798→   798→// ---------------------------------------------------------------------------
+   799→   799→// Formatting helpers for the UI
+   800→   800→// ---------------------------------------------------------------------------
+   801→   801→
+   802→   802→export function formatBytes(n: number): string {
+   803→   803→  if (!n || n < 0) return '—';
+   804→   804→  if (n < 1024) return `${n} B`;
+   805→   805→  const kb = n / 1024;
+   806→   806→  if (kb < 1024) return `${kb.toFixed(0)} KB`;
+   807→   807→  const mb = kb / 1024;
+   808→   808→  if (mb < 1024) return `${mb.toFixed(mb < 10 ? 1 : 0)} MB`;
+   809→   809→  return `${(mb / 1024).toFixed(2)} GB`;
+   810→   810→}
+   811→   811→

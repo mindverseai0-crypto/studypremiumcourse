@@ -20,6 +20,7 @@ import { isBotName, avatarUrlFor, BOT_NAMES } from '@/lib/bots';
 import { isHlsUrl, isMpdUrl, youtubeId } from '@/lib/video-utils';
 import {
   SbDownload,
+  SbDoc,
   findDownloadFor,
   subscribeDownloads,
   startDownload,
@@ -29,6 +30,14 @@ import {
 } from '@/lib/offline';
 
 const SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+/** Same-origin relay for lecture documents — lets the service worker serve
+ *  downloaded notes/DPP PDFs offline and avoids CDN CORS when viewing them
+ *  inline. The relay URL doubles as the offline Cache-API key. */
+function docRelayUrl(url: string): string {
+  if (!url || url.startsWith('/api/pw-doc')) return url;
+  return `/api/pw-doc?u=${encodeURIComponent(url)}`;
+}
 
 type PlayerKind = '' | 'dash' | 'hls' | 'youtube' | 'mp4';
 type PanelTab = '' | 'comments' | 'notes' | 'attachments';
@@ -162,6 +171,11 @@ function PlayerInner() {
   const [extras, setExtras] = useState<{ notes: DocItem[]; dpps: DocItem[]; attachments: DocItem[] }>({ notes: [], dpps: [], attachments: [] });
   const [extrasLoading, setExtrasLoading] = useState(false);
   const [extrasLoaded, setExtrasLoaded] = useState(false);
+  const extrasRef = useRef(extras);
+  const extrasPromiseRef = useRef<Promise<void> | null>(null);
+  useEffect(() => {
+    extrasRef.current = extras;
+  }, [extras]);
   const [viewingDoc, setViewingDoc] = useState<DocItem | null>(null);
   // AI bot students: "Riya is typing…" while the reply is generated
   const [botTyping, setBotTyping] = useState('');
@@ -217,6 +231,18 @@ function PlayerInner() {
     setSrc(rec.url);
     setClearKeys(rec.clearKeys || null);
     setPoster(rec.poster || '');
+    // Notes/DPP PDFs downloaded with the lecture are available offline —
+    // hydrate the docs tabs from the stored record (relay URLs → SW cache).
+    const docs = rec.docs || [];
+    if (docs.length > 0) {
+      setExtras({
+        notes: docs.filter((d) => d.kind === 'note').map((d) => ({ name: d.name, url: d.url })),
+        dpps: docs.filter((d) => d.kind === 'dpp').map((d) => ({ name: d.name, url: d.url })),
+        attachments: [],
+      });
+      setExtrasLoaded(true);
+      extrasStarted.current = true;
+    }
     setStatus('Playing downloaded copy');
     setStatusSub('Works without internet');
     setLoading(false);
@@ -255,6 +281,7 @@ function PlayerInner() {
       setExtras({ notes: [], dpps: [], attachments: [] });
       setExtrasLoaded(false);
       extrasStarted.current = false;
+      extrasPromiseRef.current = null;
       xpGiven.current = false;
       offlinePlayRef.current = false;
       offlineHeightRef.current = null;
@@ -711,20 +738,34 @@ function PlayerInner() {
 
   const startDl = useCallback(() => {
     if (!src || kind === 'youtube' || isSrEmbed) return;
-    void startDownload({
-      id: dlId,
-      title: title || 'PW Lecture',
-      batchName,
-      batchId,
-      subjectId,
-      schId: schId || videoId || realVideoId,
-      realVideoId,
-      vUrl,
-      kind: kind === 'youtube' ? 'mp4' : kind,
-      url: src,
-      clearKeys,
-      poster,
-    }).catch(() => undefined);
+    void (async () => {
+      // make sure the notes/DPP list is resolved before bundling it
+      try {
+        if (extrasStarted.current && extrasPromiseRef.current) await extrasPromiseRef.current;
+      } catch {
+        /* extras unavailable — download the video only */
+      }
+      const ex = extrasRef.current;
+      const docs: SbDoc[] = [
+        ...ex.notes.map((d) => ({ name: d.name || 'Class Note', kind: 'note' as const, url: d.url })),
+        ...ex.dpps.map((d) => ({ name: d.name || 'DPP', kind: 'dpp' as const, url: d.url })),
+      ].filter((d) => d.url);
+      void startDownload({
+        id: dlId,
+        title: title || 'PW Lecture',
+        batchName,
+        batchId,
+        subjectId,
+        schId: schId || videoId || realVideoId,
+        realVideoId,
+        vUrl,
+        kind: kind === 'youtube' ? 'mp4' : kind,
+        url: src,
+        clearKeys,
+        poster,
+        docs,
+      }).catch(() => undefined);
+    })();
   }, [src, kind, isSrEmbed, dlId, title, batchName, batchId, subjectId, schId, videoId, realVideoId, vUrl, clearKeys, poster]);
 
   const pauseDl = useCallback(() => {
@@ -779,7 +820,7 @@ function PlayerInner() {
   // scheduleId priority: schId (pw_sch_cntnt node) → videoId → realVideoId.
   // ------------------------------------------------------------------
   const loadExtras = useCallback(() => {
-    if (extrasStarted.current) return;
+    if (extrasStarted.current) return extrasPromiseRef.current ?? Promise.resolve();
     extrasStarted.current = true;
     setExtrasLoading(true);
     const q = new URLSearchParams({
@@ -788,13 +829,15 @@ function PlayerInner() {
       subjectId,
       videoId: realVideoId,
     });
-    fetch(`/api/player/extras?${q.toString()}`)
+    const p = fetch(`/api/player/extras?${q.toString()}`)
       .then((r) => r.json())
       .then((body: { success?: boolean; notes?: DocItem[]; dpps?: DocItem[]; attachments?: DocItem[] }) => {
+        // every doc goes through the same-origin relay so the URL doubles as
+        // the offline cache key (downloaded lectures serve these offline)
         setExtras({
-          notes: Array.isArray(body.notes) ? body.notes : [],
-          dpps: Array.isArray(body.dpps) ? body.dpps : [],
-          attachments: Array.isArray(body.attachments) ? body.attachments : [],
+          notes: (body.notes || []).map((d) => ({ name: d.name, url: docRelayUrl(d.url) })),
+          dpps: (body.dpps || []).map((d) => ({ name: d.name, url: docRelayUrl(d.url) })),
+          attachments: (body.attachments || []).map((d) => ({ name: d.name, url: docRelayUrl(d.url) })),
         });
         setExtrasLoaded(true);
       })
@@ -803,6 +846,8 @@ function PlayerInner() {
         setExtrasLoaded(true);
       })
       .finally(() => setExtrasLoading(false));
+    extrasPromiseRef.current = p;
+    return p;
   }, [batchId, schId, videoId, realVideoId, subjectId]);
 
   // Prefetch docs for EVERY lecture so Notes/Attachments tabs are
@@ -1565,7 +1610,7 @@ function PlayerInner() {
                           style={{ width: dlRecord && (dlRecord.partsTotal || dlRecord.parts.length) > 0 ? `${Math.round((dlRecord.partsDone / (dlRecord.partsTotal || dlRecord.parts.length)) * 100)}%` : '0%' }}
                         ></span>
                       </span>
-                      <span className="dl-sub">{dlRecord ? `${dlRecord.partsDone}/${dlRecord.partsTotal || dlRecord.parts.length} parts · tap to pause` : ''}</span>
+                      <span className="dl-sub">{dlRecord ? `${dlRecord.partsDone}/${dlRecord.partsTotal || dlRecord.parts.length} parts${dlRecord.docs && dlRecord.docs.length > 0 ? ` · docs ${dlRecord.docsDone || 0}/${dlRecord.docs.length}` : ''} · tap to pause` : ''}</span>
                     </span>
                   </div>
                 ) : dlRecord && dlRecord.status === 'paused' ? (
@@ -1593,6 +1638,15 @@ function PlayerInner() {
                         {formatBytes(dlDone.sizeBytes)}{dlDone.height ? ` · ${dlDone.height}p` : ''}
                       </span>
                     </div>
+                    {dlDone.docs && dlDone.docs.length > 0 ? (
+                      <div className="sheet-row" style={{ cursor: 'default' }}>
+                        <span className="row-icon"><i className="fas fa-file-pdf" style={{ color: '#f87171' }}></i></span>
+                        <span>Notes &amp; DPP PDFs saved</span>
+                        <span className="row-val" style={{ fontSize: '0.68rem', color: '#9ca3af' }}>
+                          {dlDone.docs.length} file{dlDone.docs.length === 1 ? '' : 's'}
+                        </span>
+                      </div>
+                    ) : null}
                     <div className="sheet-row" onClick={removeDl} role="button" tabIndex={0} aria-label="Delete download">
                       <span className="row-icon"><i className="fas fa-trash" style={{ color: '#f87171' }}></i></span>
                       <span style={{ color: '#f87171' }}>Delete download</span>
@@ -1610,7 +1664,7 @@ function PlayerInner() {
                   <div className="sheet-row" onClick={startDl} role="button" tabIndex={0} aria-label="Download lecture for offline">
                     <span className="row-icon"><i className="fas fa-download"></i></span>
                     <span>Download</span>
-                    <span className="row-val" style={{ fontSize: '0.68rem', color: '#9ca3af' }}>Watch offline</span>
+                    <span className="row-val" style={{ fontSize: '0.68rem', color: '#9ca3af' }}>Video · Notes · DPPs</span>
                   </div>
                 )
               ) : null}

@@ -13,6 +13,7 @@
 
 const SHELL = 'sb-shell-v2';
 const RUNTIME = 'sb-runtime-v2';
+const IMAGES = 'sb-images-v1';
 const SHELL_URLS = [
   '/',
   '/player',
@@ -22,6 +23,7 @@ const SHELL_URLS = [
   '/pwa-icon-512.png',
 ];
 const RUNTIME_LIMIT = 200;
+const IMAGES_LIMIT = 150;
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -41,8 +43,8 @@ self.addEventListener('activate', (event) => {
       const names = await caches.keys();
       await Promise.all(
         names.map((n) => {
-          // keep the current shell + runtime + every user's offline lecture
-          if (n === SHELL || n === RUNTIME || n.startsWith('sb-video-')) return undefined;
+          // keep the current shell + runtime + images + every user's offline lecture
+          if (n === SHELL || n === RUNTIME || n === IMAGES || n.startsWith('sb-video-')) return undefined;
           return caches.delete(n);
         }),
       );
@@ -169,6 +171,63 @@ self.addEventListener('fetch', (event) => {
         }
         if (!self.navigator.onLine) return offlineMiss('Offline: this lecture is not downloaded.');
         return fetch(req);
+      })(),
+    );
+    return;
+  }
+
+  // ---- 1c. downloaded lecture documents (notes/DPP PDFs via the doc relay).
+  //         The query string IS the doc id — exact match only, searched
+  //         across every lecture cache. ----
+  if (url.origin === self.location.origin && url.pathname === '/api/pw-doc') {
+    event.respondWith(
+      (async () => {
+        const names = (await caches.keys()).filter((n) => n.startsWith('sb-video-'));
+        for (const name of names) {
+          const cache = await caches.open(name);
+          const hit = await cache.match(url.href);
+          if (hit) {
+            const headers = new Headers(hit.headers);
+            headers.set('X-SB-Offline', 'hit');
+            return new Response(hit.body, {
+              status: hit.status,
+              statusText: hit.statusText,
+              headers,
+            });
+          }
+        }
+        if (!self.navigator.onLine) return offlineMiss('Offline: this document was not downloaded with the lecture.');
+        return fetch(req);
+      })(),
+    );
+    return;
+  }
+
+  // ---- 1d. PW CDN images (batch/lecture thumbnails): cache-first so the
+  //          enrolled-batch views render fully offline once seen online ----
+  const IMG_EXT = /\.(jpe?g|png|webp|gif|svg)$/i;
+  if (IMG_EXT.test(url.pathname) && /(\.cloudfront\.net|\.pw\.live)$/i.test(url.hostname)) {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(IMAGES);
+        const hit = await cache.match(req);
+        if (hit) return hit;
+        if (!self.navigator.onLine) return new Response('', { status: 504 });
+        try {
+          const fresh = await fetch(req);
+          if (fresh && (fresh.ok || fresh.type === 'opaque')) {
+            try {
+              const keys = await cache.keys();
+              if (keys.length >= IMAGES_LIMIT) await cache.delete(keys[0]);
+              await cache.put(req, fresh.clone());
+            } catch (_) {
+              /* ignore */
+            }
+          }
+          return fresh;
+        } catch (_) {
+          return new Response('', { status: 504 });
+        }
       })(),
     );
     return;

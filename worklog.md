@@ -578,3 +578,31 @@ Stage Summary:
 - Structural wins: IDB write storm eliminated (slim records), SW O(n²) scan stall eliminated, 8 download lanes, resume keeps progress and re-collects parts deterministically
 - Playback path also benefits (same fetchSignedAsset: manifest probes + segments are faster); e2e fixture offline playback regression-clean
 - Considered+rejected: browser→CloudFront direct fetch (CDN sends ACAO only on error responses → opaque unverifiable responses); delta lane is 5-8× slower than pearl and stays last-resort
+---
+Task ID: offline-mode
+Agent: Z.ai Code (main)
+Task: "Set the download section as the default section if the user is offline, and also show an offline warning, and allow the user to access the user, enrolled batches and their content. Add a new feature to it, and also download the lecture notes and DPPs with the lecture for offline use."
+
+Work Log:
+- New src/lib/offline-data.ts — offline app-data cache (IndexedDB `sb-appcache`/`kv`): apiCacheKey(action+sorted params), cacheApiGet/cacheApiPut, 7-day TTL, LRU cap 300 (cursor prune throttled to every 25th put), isOffline(); all failures swallowed (progressive enhancement only)
+- src/lib/api-client.ts — parchamCore now persists every cacheable GET response (all actions except parcham_vid/pw_dpp_start) and serves the cached copy (stale:true) when navigator.onLine===false OR the network call fails → enrolled batches, subjects, chapters, lectures, notes/DPP lists, tests and today's schedule all stay browsable offline once seen online; fetchCatalog gets the same fallback (key catalog:q:page:limit)
+- New src/app/api/pw-doc/route.ts — same-origin streaming relay for lecture docs (GET ?u=<encoded url>): strict host whitelist (*.cloudfront.net, *.pw.live → no open proxy), real browser UA + pw.live referer (static.pw.live 403s generic bots — first attempt failed with "fetch failed" until UA fixed), streams upstream body with content-type/content-length, 30s timeout
+- src/lib/offline.ts — SbDoc type {name, kind:'note'|'dpp', url(relay)}; SbDownload gains docs/docsDone (persisted; putDownload's slim-record logic untouched); DownloadStartSpec.docs; runDownload gains a DOCS PHASE before the video pool: fetch each relay URL → cache.put into the SAME sb-video-<folder> cache, resume-safe (cache.match skips re-fetch), docs are counted 0→N with notifyChange per file, and ONE unreachable PDF never fails the video download
+- public/sw.js — new branch 1c: same-origin /api/pw-doc requests searched EXACT-match (query IS the doc id) across every sb-video-* cache → served with X-SB-Offline: hit when downloaded, network otherwise, 503 JSON offline; new branch 1d: PW CDN images (cloudfront/pw.live + img ext) cache-first in new `sb-images-v1` (cap 150) so batch/lecture thumbnails render offline after first view; activate keeps the images cache
+- Player (src/app/player/page.tsx) — docRelayUrl() maps every extras doc (notes/dpps/attachments) to the same-origin relay so tab URLs == offline cache keys; loadExtras now returns/stores its promise (extrasPromiseRef) + extrasRef mirror; startDl awaits the in-flight extras fetch, bundles notes+dpps into spec.docs, Download row now reads "Video · Notes · DPPs"; tryOffline hydrates the Notes/Attachments tabs from rec.docs when playing the downloaded copy; kebab downloading sub-line shows "docs n/m"; done sheet gains a "Notes & DPP PDFs saved — N files" row
+- Main app (src/components/studybison/studybison-app.tsx) — online/backOnline state (onlineRef + online/offline listeners, post-hydration so no SSR mismatch); app opened offline → lands on downloads-view; 'offline' event mid-session → auto-switch to downloads-view only from home-view (cached views keep context); amber-on-dark offline warning banner under the header with a Downloads shortcut button; "Back online" fixed chip auto-hides after 3.2s on reconnect; Downloads cards show "N Notes · M DPPs" tag (dl-tag-docs); home catalog error box becomes an offline explainer with "Open Downloads" when offline; downloads page head copy now mentions bundled Notes & DPP PDFs
+- globals.css — .offline-banner (dark card, amber CTA), .online-chip (fixed bottom, safe-area aware), .dl-tag-docs
+
+E2E (agent-browser, fixture + REAL docs):
+- Seeded enrollment online → Study Dashboard + All Classes visited (caches pw_btch_dtl etc.)
+- Player fixture (vUrl=/e2ehls) with the REAL Arjuna schId → extras resolved 1 note + 1 DPP; kebab "Video · Notes · DPPs"; download finished: "Downloaded for offline · 2.8 MB" + "Notes & DPP PDFs saved — 2 files"; record.docs = 2 relay URLs, docsDone 2; PDFs inside sb-video-e2edocs with content-type application/pdf
+- Downloads view card: "1 Notes · 1 DPPs" tag
+- set offline on + reload → app lands on downloads-view + banner "You're offline…"; Study Dashboard offline → batch dropdown "Arjuna JEE 2027" + Quick Access (from app-data cache); All Classes offline → all 12 subjects (from cache)
+- Offline player → "Offline copy" chip, readyState 4; Notes tab lists the class note; View → PDF iframe served by SW (X-SB-Offline: hit, application/pdf, 6,241,822 bytes — full 6.2MB offline); Attachments tab lists note + DPP with tags
+- Reconnect → banner gone + "Back online" chip; mid-session drop while on home-view → auto-switched to downloads-view + banner
+- Zero console/page errors; cleanup: test download + its cache deleted, xp=0/watched=[] reset, app-data cache intentionally kept (it IS the offline feature); lint clean; dev.log clean
+
+Stage Summary:
+- Offline mode complete: Downloads is the default section offline, warning banner + back-online chip present, and the user's enrolled batches + all their content (subjects/chapters/lectures/notes/DPPs/tests) stay browsable offline through the new app-data cache
+- Every lecture download now bundles its Notes + DPP PDFs (docs phase in the download engine, relay-based, resume-safe, non-fatal per file) and they open offline in the player's Notes/Attachments tabs via the service worker
+- Key insight for future work: static.pw.live requires a real browser UA (generic bots get 403); doc relay is whitelisted to cloudfront/pw.live only

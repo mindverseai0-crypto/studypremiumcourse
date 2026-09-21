@@ -3,13 +3,25 @@
 // The backend relays the REAL PW content APIs used by learnxpw.site:
 // batches, subjects, chapters, lectures, notes/DPP PDFs, tests, schedule
 // and signed CloudFront DASH streams.
+//
+// Offline support: every cacheable response is persisted (src/lib/offline-data)
+// and served back from there when the device is offline or the network call
+// fails — so enrolled batches and all their content stay browsable offline
+// after having been opened online at least once.
+
+import { apiCacheKey, cacheApiGet, cacheApiPut, isOffline } from './offline-data';
 
 export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   hasMore?: boolean;
   error?: string;
+  /** True when this response came from the offline app-data cache. */
+  stale?: boolean;
 }
+
+/** Side-effectful / short-lived actions that must never be cached. */
+const UNCACHABLE_ACTIONS = new Set(['parcham_vid', 'pw_dpp_start']);
 
 export async function parchamCore<T = unknown>(
   action: string,
@@ -17,15 +29,31 @@ export async function parchamCore<T = unknown>(
   method: 'GET' | 'POST' = 'GET',
   payload: unknown = null,
 ): Promise<ApiResponse<T>> {
+  const cacheable = method === 'GET' && !UNCACHABLE_ACTIONS.has(action);
+  const key = cacheable ? apiCacheKey(action, params) : '';
+
+  // offline right away → answer from the last cached copy, if any
+  if (cacheable && isOffline()) {
+    const hit = await cacheApiGet<{ data?: T; hasMore?: boolean }>(key);
+    if (hit) return { success: true, data: hit.data as T, hasMore: hit.hasMore, stale: true };
+  }
+
   try {
     const res = await fetch('/api/data', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ action, params, method, payload }),
     });
-    if (!res.ok) return { success: false, error: `HTTP ${res.status}` };
-    return (await res.json()) as ApiResponse<T>;
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = (await res.json()) as ApiResponse<T>;
+    if (cacheable && body.success) void cacheApiPut(key, { data: body.data, hasMore: body.hasMore });
+    return body;
   } catch (e) {
+    // network failure → fall back to the cached copy (stale) when we have one
+    if (cacheable) {
+      const hit = await cacheApiGet<{ data?: T; hasMore?: boolean }>(key);
+      if (hit) return { success: true, data: hit.data as T, hasMore: hit.hasMore, stale: true };
+    }
     return { success: false, error: e instanceof Error ? e.message : 'Network error' };
   }
 }
@@ -177,14 +205,31 @@ export const api = {
     parchamCore<VideoPayloadPublic | null>('parcham_vid', { childId, batchId, subjectId, vUrl, videoId: realVideoId }),
 };
 
+interface CatalogPage {
+  success: boolean;
+  total: number;
+  page: number;
+  hasMore: boolean;
+  data: BatchCatalogItem[];
+  stale?: boolean;
+}
+
 export async function fetchCatalog(q: string, page: number, limit = 20) {
-  const res = await fetch(`/api/batches?q=${encodeURIComponent(q)}&page=${page}&limit=${limit}`);
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return (await res.json()) as {
-    success: boolean;
-    total: number;
-    page: number;
-    hasMore: boolean;
-    data: BatchCatalogItem[];
-  };
+  const key = apiCacheKey('catalog', { q, page, limit });
+  // offline → last cached page of the catalog (stale copy)
+  if (isOffline()) {
+    const hit = await cacheApiGet<CatalogPage>(key);
+    if (hit) return { ...hit, stale: true };
+  }
+  try {
+    const res = await fetch(`/api/batches?q=${encodeURIComponent(q)}&page=${page}&limit=${limit}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = (await res.json()) as CatalogPage;
+    if (body?.success) void cacheApiPut(key, body);
+    return body;
+  } catch (e) {
+    const hit = await cacheApiGet<CatalogPage>(key);
+    if (hit) return { ...hit, stale: true };
+    throw e instanceof Error ? e : new Error('Network error');
+  }
 }
