@@ -145,6 +145,9 @@ function PlayerInner() {
   const [sigInput, setSigInput] = useState('');
   const [sigBusy, setSigBusy] = useState(false);
   const [sigMsg, setSigMsg] = useState('');
+  // bumped after a successful registration so the attach effect re-runs even
+  // when the relay url is identical to the one that just failed
+  const [sigReloadKey, setSigReloadKey] = useState(0);
 
   // player extras
   const [volume, setVolume] = useState(100);
@@ -486,7 +489,7 @@ function PlayerInner() {
         }
       }
     };
-  }, [src, kind, clearKeys]);
+  }, [src, kind, clearKeys, sigReloadKey]);
 
   // ------------------------------------------------------------------
   // Volume / loop persistence + application.
@@ -712,6 +715,7 @@ function PlayerInner() {
       setPoster('');
       setStatus('Ready to play');
       setLoading(false);
+      setSigReloadKey((k) => k + 1);
     } catch (e) {
       setSigMsg(e instanceof Error ? e.message : 'Could not register this URL.');
     } finally {

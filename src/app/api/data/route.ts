@@ -552,6 +552,25 @@ async function payloadFromRawUrl(
     return { kind: "dash", url: relay.url, signedUrl: "", clearKeys, poster: "", drmDetails: null };
   }
   if (/\.m3u8(\?|$)/i.test(url)) {
+    // Root-level LIVE manifest (PW live channel: https://<dist>/index.m3u8, no
+    // UUID folder) → the /api/live relay, which signs it from the persistent
+    // store's "live:<host>" entry (owner-pasted signed live URL).
+    try {
+      const u = new URL(url);
+      const segs = u.pathname.split("/").filter(Boolean);
+      if (segs.length === 1 && /\.cloudfront\.net$/i.test(u.host)) {
+        return {
+          kind: "hls",
+          url: `/api/live/h/${u.host}/${segs[0]}`,
+          signedUrl: "",
+          clearKeys: null,
+          poster: "",
+          drmDetails: null,
+        };
+      }
+    } catch {
+      /* fall through to the folder-based relay */
+    }
     const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: upstreamSignedUrl });
     if (!relay) return null;
     return { kind: "hls", url: relay.url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
@@ -595,12 +614,21 @@ async function resolveVideoPayload(
     if (payload) return payload;
   }
 
-  // No signed stream — maybe a youtube lecture.
+  // No video-doc stream — the SCHEDULE itself may carry the manifest. Live
+  // classes (urlType awsVideo) keep an UNSIGNED CloudFront HLS url here and
+  // have no video doc at all; past live classes keep their replay url. The
+  // schedule url is the only remaining source — use it for every kind
+  // (youtube / m3u8 / mpd / mp4), not just youtube.
   if (subjectId) {
     const detail = await lxScheduleDetail(batchId, subjectId, childId).catch(() => null);
-    const url = (detail as { url?: string } | null)?.url || "";
-    if (url && /youtube\.com|youtu\.be/i.test(url)) {
-      return { kind: "youtube", url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+    const schedUrl = (detail as { url?: string } | null)?.url || "";
+    if (schedUrl && /^https?:\/\//i.test(schedUrl.trim())) {
+      const payload = await payloadFromRawUrl(schedUrl.trim(), "", sigOpts);
+      if (payload) return payload;
+      // youtube schedules stay a direct passthrough even if nothing resolved
+      if (/youtube\.com|youtu\.be/i.test(schedUrl)) {
+        return { kind: "youtube", url: schedUrl.trim(), signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+      }
     }
   }
   return null;

@@ -1,5 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { parseSignedUrl, persistSignature, listStoredSignatures, ParsedSignature } from '@/lib/signature-store';
+import {
+  parseSignedUrl,
+  parseLiveSignedUrl,
+  persistSignature,
+  persistLiveSignature,
+  listStoredSignatures,
+  ParsedSignature,
+} from '@/lib/signature-store';
 import { fetchSignedAsset } from '@/lib/pw-cdn';
 import { lxOtp } from '@/lib/lx-api';
 
@@ -45,6 +52,51 @@ export async function POST(request: NextRequest) {
   const rawUrl = typeof body.url === 'string' ? body.url : '';
   const folderHint = typeof body.folder === 'string' ? body.folder.trim() : '';
   const rawSig = typeof body.signature === 'string' ? body.signature.trim() : '';
+
+  // ---- LIVE urls (root-level manifest, no UUID folder) first ----
+  if (rawUrl && /\.(?:m3u8|mpd)(\?|$)/i.test(rawUrl) && !/\/[a-f0-9-]{16,}\//i.test(rawUrl.split('?')[0])) {
+    const live = parseLiveSignedUrl(rawUrl);
+    if (!live.ok) {
+      // structurally a live url — surface the live-specific error
+      if (/^https?:\/\//i.test(rawUrl) && !/\/[a-f0-9-]{16,}\//i.test(rawUrl.split('?')[0])) {
+        return NextResponse.json({ success: false, error: live.error }, { status: 400, headers: CORS });
+      }
+    } else {
+      const { sig } = live;
+      persistLiveSignature(sig);
+
+      // best-effort manifest probe so the caller knows whether it plays yet
+      let manifestOk: boolean | null = null;
+      try {
+        const res = await fetch(`https://${sig.host}/${sig.asset}${sig.query}`, {
+          cache: 'no-store',
+          signal: AbortSignal.timeout(20000),
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126.0 Safari/537.36',
+          },
+        });
+        manifestOk = res.ok;
+      } catch {
+        manifestOk = null;
+      }
+
+      const kind = /\.mpd$/i.test(sig.asset) ? 'dash' : 'hls';
+      return NextResponse.json(
+        {
+          success: true,
+          live: true,
+          host: sig.host,
+          asset: sig.asset,
+          kind,
+          relayUrl: `/api/live/h/${sig.host}/${sig.asset}`,
+          manifestOk,
+          exp: sig.exp,
+        },
+        { headers: CORS },
+      );
+    }
+  }
 
   let parsed: ParsedSignature;
   if (rawUrl) {

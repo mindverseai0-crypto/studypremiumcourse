@@ -283,6 +283,111 @@ export function lookupStoredSignature(folder: string): string | null {
   return entry.query;
 }
 
+// ---------------------------------------------------------------------------
+// LIVE streams — root-level manifests on a distribution of their own
+// (urlType awsVideo: https://<dist>/index.m3u8?start=…&Signature=…), i.e. NO
+// UUID folder. They are stored under the key "live:<host>" so a later paste
+// for the same live distribution replaces the previous entry.
+// ---------------------------------------------------------------------------
+
+export interface ParsedLiveSignature {
+  host: string;
+  asset: string; // e.g. "index.m3u8"
+  query: string; // normalized, starts with "?"
+  exp: number | null;
+}
+
+const LIVE_ASSET_RE = /^[\w.-]+\.(?:m3u8|mpd)$/i;
+const LIVE_KEY = 'live:';
+
+/**
+ * Parse a signed LIVE url / query: https://<dist>/index.m3u8?Signature=…
+ * Same validation as parseSignedUrl (Signature/Key-Pair-Id/Policy + expiry)
+ * but the path is a root-level media asset instead of a UUID folder.
+ */
+export function parseLiveSignedUrl(
+  raw: string,
+): { ok: true; sig: ParsedLiveSignature } | { ok: false; error: string } {
+  const input = (raw || '').trim();
+  if (!input) return { ok: false, error: 'Paste a signed live URL.' };
+
+  let urlPart = input;
+  let query = '';
+  const qIdx = input.indexOf('?');
+  if (qIdx >= 0) {
+    urlPart = input.slice(0, qIdx);
+    query = input.slice(qIdx + 1);
+  } else if (/Signature=/i.test(input)) {
+    query = input;
+    urlPart = '';
+  }
+  const has = (k: string) => new RegExp(`[?&]?${k}=`, 'i').test(query || '');
+  if (!query || !(has('Signature') && has('Key-Pair-Id') && has('Policy'))) {
+    return {
+      ok: false,
+      error: 'URL is missing Signature / Key-Pair-Id / Policy — copy the FULL signed live URL including the query string.',
+    };
+  }
+  const normalized = `?${query.replace(/^[?&]+/, '')}`;
+  const policy = parsePolicy(normalized);
+  if (!policy) {
+    return { ok: false, error: 'Policy could not be decoded — the signature looks truncated or invalid.' };
+  }
+  if (policy.exp !== null) {
+    const now = Math.floor(Date.now() / 1000);
+    if (now >= policy.exp) {
+      return { ok: false, error: 'This signature has expired (Policy DateLessThan already passed).' };
+    }
+  }
+
+  let host = '';
+  let asset = '';
+  try {
+    const u = new URL(urlPart);
+    host = u.host;
+    const parts = u.pathname.split('/').filter(Boolean);
+    asset = parts[parts.length - 1] || '';
+  } catch {
+    return { ok: false, error: 'This does not look like a valid live stream URL.' };
+  }
+  if (!/\.(?:cloudfront\.net|pw\.live)$/i.test(host)) {
+    return { ok: false, error: 'The live host must be a CloudFront / PW distribution.' };
+  }
+  if (!LIVE_ASSET_RE.test(asset)) {
+    return { ok: false, error: 'The live manifest path must end in .m3u8 or .mpd.' };
+  }
+  return { ok: true, sig: { host, asset, query: normalized, exp: policy.exp } };
+}
+
+/** Upsert a live signature (keyed "live:<host>" — one per distribution). */
+export function persistLiveSignature(sig: ParsedLiveSignature, source = 'live-manual'): StoredSignature {
+  const shape = readStoreRaw();
+  const entry: StoredSignature = {
+    query: sig.query,
+    host: sig.host,
+    exp: sig.exp,
+    addedAt: Date.now(),
+    source,
+  };
+  shape[`${LIVE_KEY}${sig.host}`] = entry;
+  writeStoreRaw(shape);
+  invalidateCache();
+  return entry;
+}
+
+/** Non-expired stored live signature for a distribution host, or null. */
+export function lookupLiveSignature(host: string): string | null {
+  const h = (host || '').trim().toLowerCase();
+  if (!h) return null;
+  const shape = readStore();
+  const entry = shape[`${LIVE_KEY}${h}`];
+  if (!entry) return null;
+  if (entry.exp !== null && entry.exp !== undefined) {
+    if (Math.floor(Date.now() / 1000) >= entry.exp) return null; // expired
+  }
+  return entry.query;
+}
+
 /** Registered folders for admin/inspection (no raw signatures). */
 export function listStoredSignatures(): Array<{
   folder: string;

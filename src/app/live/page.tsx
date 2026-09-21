@@ -76,6 +76,14 @@ function LiveInner() {
   const [voted, setVoted] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
 
+  // signed-live-URL recovery (mirrors the player's lecture recovery box)
+  const [sigInput, setSigInput] = useState('');
+  const [sigBusy, setSigBusy] = useState(false);
+  const [sigMsg, setSigMsg] = useState('');
+  // bumped after a successful registration so the attach effect re-runs even
+  // when the relay url is identical to the one that just failed
+  const [reloadKey, setReloadKey] = useState(0);
+
   // ------------------------------------------------------------------
   // Resolve payload — per-batch/class content FIRST (each batch plays its
   // own lecture, not one shared video), shared live channel as fallback.
@@ -210,7 +218,7 @@ function LiveInner() {
         }
       }
     };
-  }, [src, kind, clearKeys]);
+  }, [src, kind, clearKeys, reloadKey]);
 
   const loadAttachments = useCallback(async () => {
     if (attachments !== null) return;
@@ -322,6 +330,45 @@ function LiveInner() {
     else window.close();
   }, []);
 
+  // Register a pasted signed LIVE url server-side, then play its relay.
+  const submitLiveSignature = useCallback(async () => {
+    const url = sigInput.trim();
+    if (!url || sigBusy) return;
+    setSigBusy(true);
+    setSigMsg('');
+    try {
+      const res = await fetch('/api/pw-register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
+      });
+      const body = (await res.json()) as {
+        success?: boolean;
+        error?: string;
+        kind?: string;
+        relayUrl?: string;
+        manifestOk?: boolean | null;
+      };
+      if (!res.ok || !body.success || !body.relayUrl) {
+        throw new Error(body.error || 'This signed live URL could not be registered.');
+      }
+      setError('');
+      setSigMsg('');
+      setKind((body.kind as PlayerKind) || 'hls');
+      setSrc(body.relayUrl);
+      setLoading(true);
+      setReloadKey((k) => k + 1);
+      if (body.manifestOk === false) {
+        setSigMsg('Registered — the stream did not answer the probe yet, trying anyway…');
+        setTimeout(() => setSigMsg(''), 5000);
+      }
+    } catch (e) {
+      setSigMsg(e instanceof Error ? e.message : 'Registration failed.');
+    } finally {
+      setSigBusy(false);
+    }
+  }, [sigInput, sigBusy]);
+
   useEffect(() => {
     scheduleHide();
     return () => {
@@ -370,6 +417,43 @@ function LiveInner() {
             <i className="fas fa-video-slash" style={{ fontSize: '2rem', marginBottom: '10px' }}></i>
             <br />
             <span>{error}</span>
+            <div className="sig-recovery">
+              <div className="sig-recovery-title">
+                <i className="fas fa-key"></i> Have a signed live URL?
+              </div>
+              <p className="sig-recovery-hint">
+                Live streams are signature-gated — the class may also simply not have started yet. Paste the FULL
+                signed live URL (…/index.m3u8?start=…&amp;Signature=…&amp;Key-Pair-Id=…&amp;Policy=…) to unlock this
+                stream. It is registered server-side and kept for future plays.
+              </p>
+              <input
+                className="sig-recovery-input"
+                type="url"
+                value={sigInput}
+                placeholder="https://…/index.m3u8?Signature=…"
+                onChange={(e) => setSigInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') void submitLiveSignature();
+                }}
+              />
+              <button
+                className="sig-recovery-btn"
+                type="button"
+                onClick={() => void submitLiveSignature()}
+                disabled={sigBusy || !sigInput.trim()}
+              >
+                {sigBusy ? (
+                  <>
+                    <i className="fas fa-spinner fa-spin"></i> Verifying…
+                  </>
+                ) : (
+                  <>
+                    <i className="fas fa-play"></i> Load Stream
+                  </>
+                )}
+              </button>
+              {sigMsg ? <div className="sig-recovery-msg">{sigMsg}</div> : null}
+            </div>
           </div>
         ) : null}
 
