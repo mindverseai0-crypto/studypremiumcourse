@@ -541,3 +541,21 @@ Stage Summary:
 - Any PW lecture (DASH ClearKey, HLS AES-128, mp4) can now be downloaded from the player (⋮ → Download, or the download icon) and watched with the network fully off — unlimited downloads, capped only by device storage (persistent-storage requested so the browser won't evict)
 - Offline correctness rests on: same-origin signed-in-PATH relay URLs (stable across sessions), per-lecture Cache API served by the SW, persisted ClearKeys + pinned rendition in the download record, and network-first static caching (no stale chunks in dev)
 - New surface: public/sw.js, public/manifest.webmanifest, pwa-icon-*.png, scripts/make-pwa-icons.mjs, src/lib/offline.ts, src/components/pwa-register.tsx; edits: layout.tsx, player page+css, studybison-app.tsx, globals.css
+---
+Task ID: restore-local-state-7
+Agent: Z.ai Code (main)
+Task: Fix build error "Module not found: Can't resolve '@/lib/local-state'" (studybison-app.tsx:24 imports addXP/useEnrolledBatches/useXP/useWatchedVideos; player/page.tsx imports addXP) — SEVENTH sandbox revert loss
+
+Work Log:
+- Same casualty pattern as restores 2-6: src/lib/local-state.ts deleted by snapshot revert while ALL consumers survived — this time including the newest surfaces (offline.ts, bots.ts, pwa-register.tsx, sw.js, manifest.webmanifest, signature-store, pw-signatures.json all verified present; only local-state.ts missing)
+- Rebuilt from the restore-local-state-3/4/5 hardened spec in one paste: useSyncExternalStore with module-level stable subscribe/getSnapshot/getServerSnapshot fns; cachedList() parses the RAW localStorage string and memoizes per raw value (reference-stable snapshots, MEMO_CAP 64 w/ oldest-evict); EMPTY_LIST module constant for SSR; per-key custom events (sb-enrolled/watched/xp-changed) + native storage event (incl. e.key===null clear() case); idempotent enroll/unenroll (write+dispatch only on real change); toggleWatched returns added:boolean
+- addXP toast: self-contained #sb-xp-toast-style stylesheet + .sb-xp-toast pill (fixed, safe-area-inset-bottom aware, z-index max, dark pill/amber text), single-replace (existing pill removed + timer cleared), WAAPI 2400ms cubic-bezier(0.22,1,0.36,1) with translateX(-50%) preserved in every keyframe, animation.finished guarded
+- Keys unchanged: pw_enrolled_batches / pw_watched_videos / pw_xp
+- bun run lint clean; dev server hot-recovered WITHOUT restart — GET / 200 in 40ms immediately after paste
+- E2E (agent-browser): home 40 cards + XP chip "0 XP" + no error box; enroll Arjuna JEE 2027 → pw_enrolled_batches=["698ad3519549b300a5e1cc6a"], dropdown hydrates, study view renders subjects/notes; PH Physics → chapter → .btn-check-done toggle ON → .active + watched=["69ce879a58a0411e9cf01972"] + pw_xp=10 + toast "+10 XP · Watched Video"; toggle OFF → watched=[], XP stays 10 (no double award); toggle ON again → 20; reload → chip hydrates "20 XP"; cross-tab tab2 set pw_xp=77 → tab1 chip "77 XP" via storage event; zero console/page errors
+- Test state reset (xp=0, watched=[], enrollment kept); browser closed
+
+Stage Summary:
+- Seventh restore complete, fastest yet (~3 min from error report to verified): the spec in restore-local-state-3/4/5 remains the single recovery source — the module was never git-committed, so future agents MUST keep rebuilding from that spec verbatim (raw-string parse + stable snapshots + dual fan-out + idempotent writes + self-contained toast)
+- All post-revert features confirmed intact in the same pass: PWA Downloads view + sw.js + manifest, bot comment system files, signature store — no other casualties
+- Home, study view, enrollment, XP/watched system all verified working end-to-end
