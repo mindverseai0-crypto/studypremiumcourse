@@ -1,0 +1,1062 @@
+     1→import { NextRequest, NextResponse } from "next/server";
+     2→import {
+     3→  lxAllBatches, // (re-exported for potential tooling; catalog route uses /api/batches)
+     4→  lxBatchDetails,
+     5→  lxBatchAnnouncements,
+     6→  lxChapters,
+     7→  lxTopicContent,
+     8→  lxTodaySchedule,
+     9→  lxScheduleDetail,
+    10→  lxBatchTests,
+    11→  lxTestInstructions,
+    12→  lxDppList,
+    13→  lxStartDpp,
+    14→  lxVideoUrl,
+    15→  lxOtp,
+    16→  LxScheduleItem,
+    17→  LxContentType,
+    18→} from "@/lib/lx-api";
+    19→import {
+    20→  registerSignedFolder,
+    21→  registerFolderHost,
+    22→  folderFromUrl,
+    23→  hostFromUrl,
+    24→  subPathFromUrl,
+    25→  getSignedQuery,
+    26→  getFallbackSignedQuery,
+    27→  fetchSignedAsset,
+    28→} from "@/lib/pw-cdn";
+    29→import { lookupStoredSignature, parsePolicy } from "@/lib/signature-store";
+    30→
+    31→void lxAllBatches; // catalog lives in /api/batches
+    32→
+    33→export const dynamic = "force-dynamic";
+    34→
+    35→// ---------------------------------------------------------------------------
+    36→// Latency guards — lecture loading used to run 3-5 serial upstream calls per
+    37→// open (video-url → signer → manifest probe → otp). Everything below makes
+    38→// repeats instant and concurrent loads share one upstream roundtrip.
+    39→// ---------------------------------------------------------------------------
+    40→
+    41→type MemoEntry = { at: number; ttl: number; value: unknown };
+    42→const MEMO_MAX = 400;
+    43→
+    44→function memoGet(map: Map<string, MemoEntry>, key: string): MemoEntry | null {
+    45→  const hit = map.get(key);
+    46→  if (!hit) return null;
+    47→  if (Date.now() - hit.at > hit.ttl) {
+    48→    map.delete(key);
+    49→    return null;
+    50→  }
+    51→  return hit;
+    52→}
+    53→
+    54→function memoSet(map: Map<string, MemoEntry>, key: string, value: unknown, ttl: number): void {
+    55→  if (map.size >= MEMO_MAX) {
+    56→    const oldest = map.keys().next().value;
+    57→    if (oldest) map.delete(oldest);
+    58→  }
+    59→  map.set(key, { at: Date.now(), ttl, value });
+    60→}
+    61→
+    62→/** True when the query has no Policy expiry, or the expiry is still ahead. */
+    63→function nonExpiredQuery(q: string | null): string | null {
+    64→  if (!q) return null;
+    65→  const policy = parsePolicy(q.startsWith("?") ? q : `?${q}`);
+    66→  if (policy?.exp && Math.floor(Date.now() / 1000) >= policy.exp) return null;
+    67→  return q;
+    68→}
+    69→
+    70→// Shared CORS headers (same-origin frontend normally, kept for safety).
+    71→const CORS_HEADERS: Record<string, string> = {
+    72→  "Access-Control-Allow-Origin": "*",
+    73→  "Access-Control-Allow-Headers": "Content-Type",
+    74→  "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+    75→};
+    76→
+    77→export async function OPTIONS() {
+    78→  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
+    79→}
+    80→
+    81→type Params = Record<string, unknown>;
+    82→
+    83→interface ActionBody {
+    84→  action?: unknown;
+    85→  params?: unknown;
+    86→  method?: unknown;
+    87→  payload?: unknown;
+    88→}
+    89→
+    90→const asParams = (v: unknown): Params =>
+    91→  v && typeof v === "object" && !Array.isArray(v) ? (v as Params) : {};
+    92→
+    93→const str = (v: unknown, fallback = ""): string =>
+    94→  v === undefined || v === null ? fallback : String(v);
+    95→
+    96→const num = (v: unknown, fallback: number): number => {
+    97→  const n = Number(v);
+    98→  return Number.isFinite(n) ? n : fallback;
+    99→};
+   100→
+   101→/** Payload may arrive as object or JSON string. */
+   102→function parsePayload(payload: unknown): unknown {
+   103→  if (typeof payload === "string") {
+   104→    try {
+   105→      return JSON.parse(payload);
+   106→    } catch {
+   107→      return payload;
+   108→    }
+   109→  }
+   110→  return payload;
+   111→}
+   112→
+   113→// ---------------------------------------------------------------------------
+   114→// upstream → protocol transforms
+   115→// ---------------------------------------------------------------------------
+   116→
+   117→function asArray(v: unknown): unknown[] {
+   118→  return Array.isArray(v) ? v : v ? [v] : [];
+   119→}
+   120→
+   121→/** PDF attachments are baked as /api/lxpdf links that resolve the real file. */
+   122→function pdfAttachmentRef(batchId: string, subjectId: string, pdfId: string, attachmentId: string) {
+   123→  const q = `batchId=${encodeURIComponent(batchId)}&subjectId=${encodeURIComponent(
+   124→    subjectId,
+   125→  )}&pdfId=${encodeURIComponent(pdfId)}&attachmentId=${encodeURIComponent(attachmentId)}`;
+   126→  return { baseUrl: `/api/lxpdf?${q}`, key: "", _id: attachmentId };
+   127→}
+   128→
+   129→function subjectRef(s: unknown): { _id: string; slug: string; name: string } {
+   130→  if (s && typeof s === "object") {
+   131→    const o = s as { _id?: string; slug?: string; name?: string };
+   132→    return { _id: o._id || "", slug: o.slug || o._id || "", name: o.name || "" };
+   133→  }
+   134→  return { _id: String(s || ""), slug: String(s || ""), name: "" };
+   135→}
+   136→
+   137→function eventStatus(item: LxScheduleItem, startIso: string, endIso: string): string {
+   138→  const tag = String(item.tag || "").toLowerCase();
+   139→  if (tag === "live" || tag === "live now") return "LIVE";
+   140→  if (tag === "upcoming") return "UPCOMING";
+   141→  if (tag === "ended" || tag === "cancelled") return tag === "cancelled" ? "CANCELLED" : "ENDED";
+   142→  const now = Date.now();
+   143→  const s = new Date(startIso || "").getTime();
+   144→  const e = new Date(endIso || "").getTime();
+   145→  if (Number.isFinite(s) && Number.isFinite(e)) {
+   146→    if (now >= s && now <= e) return "LIVE";
+   147→    if (now < s) return "UPCOMING";
+   148→  }
+   149→  return "ENDED";
+   150→}
+   151→
+   152→function scheduleEventNode(batchId: string, item: LxScheduleItem) {
+   153→  const startIso = item.startTime || item.date || "";
+   154→  const endIso = item.endTime || "";
+   155→  const subj = subjectRef(item.subjectId);
+   156→  const image =
+   157→    (item.videoDetails && item.videoDetails.image) || item.previewImageUrl || "";
+   158→  return {
+   159→    _id: item._id || "",
+   160→    type: "LECTURE",
+   161→    data: {
+   162→      _id: item._id || "",
+   163→      topic: item.topic || item.name || "Class",
+   164→      startTime: startIso,
+   165→      endTime: endIso,
+   166→      status: eventStatus(item, startIso, endIso),
+   167→      lectureType: item.lectureType || "",
+   168→      urlType: item.urlType || "",
+   169→      url: item.url || "",
+   170→      videoDetails: { _id: item._id || "", image },
+   171→      subjectId: { _id: subj._id, slug: subj.slug },
+   172→      slug: item.slug || "",
+   173→      homeworkIds: [],
+   174→      exerciseIds: [],
+   175→      batchId,
+   176→    },
+   177→  };
+   178→}
+   179→
+   180→function contentNodesFromItems(
+   181→  batchId: string,
+   182→  subjectId: string,
+   183→  items: LxScheduleItem[],
+   184→  kind: "LECTURE" | "DPP_VIDEOS" | "NOTES",
+   185→): Array<{ _id: string; type: string; data: Record<string, unknown> }> {
+   186→  const nodes: Array<{ _id: string; type: string; data: Record<string, unknown> }> = [];
+   187→  for (const item of items) {
+   188→    const pdfId = item._id || "";
+   189→
+   190→    if (kind === "LECTURE" || kind === "DPP_VIDEOS") {
+   191→      const vd = item.videoDetails || {};
+   192→      nodes.push({
+   193→        _id: item._id || "",
+   194→        type: kind,
+   195→        data: {
+   196→          _id: item._id || "",
+   197→          topic: item.topic || vd.name || item.name || "Lecture",
+   198→          date: item.date || item.startTime || "",
+   199→          urlType: item.urlType || "",
+   200→          url: item.url || "",
+   201→          videoDetails: {
+   202→            _id: item._id || "",
+   203→            image: vd.image || item.previewImageUrl || "",
+   204→            videoUrl: "",
+   205→            duration: vd.duration || "",
+   206→          },
+   207→          homeworkIds: asArray(item.homeworkIds).flatMap((hw) => {
+   208→            const h = hw as { _id?: string; topic?: string; attachmentIds?: unknown[] };
+   209→            return asArray(h.attachmentIds).map((att) => {
+   210→              const a = att as { _id?: string };
+   211→              return {
+   212→                _id: h._id || "",
+   213→                topic: h.topic || "Class Note",
+   214→                attachmentIds: [pdfAttachmentRef(batchId, subjectId, pdfId, a._id || "")],
+   215→              };
+   216→            });
+   217→          }),
+   218→          exerciseIds: [],
+   219→        },
+   220→      });
+   221→      continue;
+   222→    }
+   223→
+   224→    // NOTES / DppNotes → PDF cards
+   225→    const atts: Array<Record<string, unknown>> = [];
+   226→    let title = item.topic || item.name || "";
+   227→    const homeworkSources = [
+   228→      ...asArray(item.homeworkIds),
+   229→      ...asArray(item.dpp?.homeworkIds),
+   230→    ];
+   231→    for (const hw of homeworkSources) {
+   232→      const h = hw as { _id?: string; topic?: string; attachmentIds?: unknown[] };
+   233→      if (!title && h.topic) title = h.topic;
+   234→      for (const att of asArray(h.attachmentIds)) {
+   235→        const a = att as { _id?: string; key?: string; baseUrl?: string; name?: string };
+   236→        if (!a?._id) continue;
+   237→        if (!title) title = a.name || "";
+   238→        // some attachments already carry a real static.pw.live key
+   239→        const direct = a.baseUrl && a.key ? `${a.baseUrl}${a.key}` : "";
+   240→        const ref = direct
+   241→          ? { baseUrl: direct, key: "", _id: a._id }
+   242→          : pdfAttachmentRef(batchId, subjectId, pdfId, a._id);
+   243→        atts.push({
+   244→          _id: a._id,
+   245→          topic: h.topic || a.name || item.topic || item.name || "Study Material",
+   246→          attachmentIds: [ref],
+   247→        });
+   248→      }
+   249→    }
+   250→    if (atts.length === 0) continue;
+   251→    nodes.push({
+   252→      _id: item._id || "",
+   253→      type: "NOTES",
+   254→      data: {
+   255→        _id: item._id || "",
+   256→        topic: title || "Study Material",
+   257→        date: item.date || item.startTime || "",
+   258→        homeworkIds: atts,
+   259→      },
+   260→    });
+   261→  }
+   262→  return nodes;
+   263→}
+   264→
+   265→function resolveContentKind(contentType: string): "LECTURE" | "DPP_VIDEOS" | "NOTES" | null {
+   266→  switch ((contentType || "ALL").toUpperCase()) {
+   267→    case "ALL":
+   268→    case "LECTURE":
+   269→      return "LECTURE";
+   270→    case "DPP_VIDEOS":
+   271→      return "DPP_VIDEOS";
+   272→    case "NOTES":
+   273→    case "DPP_PDF":
+   274→      return "NOTES";
+   275→    default:
+   276→      return null;
+   277→  }
+   278→}
+   279→
+   280→function upstreamContentType(contentType: string): LxContentType {
+   281→  switch ((contentType || "ALL").toUpperCase()) {
+   282→    case "DPP_VIDEOS":
+   283→      return "DppVideos";
+   284→    case "DPP_PDF":
+   285→      return "DppNotes";
+   286→    case "NOTES":
+   287→      return "notes";
+   288→    default:
+   289→      return "videos";
+   290→  }
+   291→}
+   292→
+   293→/**
+   294→ * Direct (unsigned) CloudFront urls per schedule item from the owner's
+   295→ * V2 listing API — the same source the production site merges into its
+   296→ * content lists. Best-effort: failure simply leaves the nodes untouched.
+   297→ * Memoized 5 min (60s when empty) so chapter revisits skip the roundtrip.
+   298→ */
+   299→const v2Memo = new Map<string, MemoEntry>();
+   300→
+   301→async function v2DirectUrls(
+   302→  batchId: string,
+   303→  subjectId: string,
+   304→  tagId: string,
+   305→): Promise<Map<string, { url: string; videoId: string }>> {
+   306→  const memoKey = `${batchId}|${subjectId}|${tagId}`;
+   307→  const hit = memoGet(v2Memo, memoKey);
+   308→  if (hit) return hit.value as Map<string, { url: string; videoId: string }>;
+   309→  const out = await fetchV2DirectUrls(batchId, subjectId, tagId);
+   310→  memoSet(v2Memo, memoKey, out, out.size > 0 ? 5 * 60_000 : 60_000);
+   311→  return out;
+   312→}
+   313→
+   314→async function fetchV2DirectUrls(
+   315→  batchId: string,
+   316→  subjectId: string,
+   317→  tagId: string,
+   318→): Promise<Map<string, { url: string; videoId: string }>> {
+   319→  const out = new Map<string, { url: string; videoId: string }>();
+   320→  try {
+   321→    const controller = new AbortController();
+   322→    const timer = setTimeout(() => controller.abort(), 9000);
+   323→    const res = await fetch("https://pw.studyparcham.in/api/data", {
+   324→      method: "POST",
+   325→      headers: { "Content-Type": "application/json" },
+   326→      cache: "no-store",
+   327→      signal: controller.signal,
+   328→      body: JSON.stringify({
+   329→        action: "pw_v2_list",
+   330→        params: { batchId, subjectId, tagId, contentType: "videos", page: 1 },
+   331→        method: "GET",
+   332→        payload: null,
+   333→      }),
+   334→    });
+   335→    clearTimeout(timer);
+   336→    if (!res.ok) return out;
+   337→    const body = (JSON.parse(await res.text()) as {
+   338→      data?: Array<{
+   339→        _id?: string;
+   340→        url?: string;
+   341→        videoDetails?: { videoUrl?: string; _id?: string };
+   342→      }>;
+   343→    });
+   344→    for (const it of body.data || []) {
+   345→      const u = it.url || it.videoDetails?.videoUrl || "";
+   346→      if (it._id && u) out.set(it._id, { url: u, videoId: it.videoDetails?._id || "" });
+   347→    }
+   348→  } catch {
+   349→    /* best-effort merge */
+   350→  }
+   351→  return out;
+   352→}
+   353→
+   354→/** base64url-encode a signed query for the stateless /s/<sig>/ relay path. */
+   355→function sigPathSegment(signedQuery: string): string {
+   356→  const q = signedQuery.startsWith("?") ? signedQuery.slice(1) : signedQuery;
+   357→  if (!q) return "";
+   358→  return Buffer.from(q, "utf8").toString("base64url");
+   359→}
+   360→
+   361→// ---------------------------------------------------------------------------
+   362→// Lecture stream signing chain (server-side only).
+   363→//
+   364→// 1. signedUrl from the upstream video-url API (per-video folder policy)
+   365→// 2. LECTURE_SIGN_URL env template (owner's signing service, e.g.
+   366→//    https://video-detail.studyparcham.in/?batch_id={batch_id}&video_id={video_id}&subject_id={subject_id})
+   367→// 3. non-expired fallback constants registered in pw-cdn
+   368→// ---------------------------------------------------------------------------
+   369→
+   370→async function envSignerSignedQuery(
+   371→  batchId: string,
+   372→  videoId: string,
+   373→  subjectId: string,
+   374→): Promise<string> {
+   375→  const tpl = process.env.LECTURE_SIGN_URL || "";
+   376→  if (!tpl) return "";
+   377→  const url = tpl
+   378→    .replace(/\{batch_id\}/g, encodeURIComponent(batchId))
+   379→    .replace(/\{video_id\}/g, encodeURIComponent(videoId))
+   380→    .replace(/\{subject_id\}/g, encodeURIComponent(subjectId));
+   381→  try {
+   382→    const controller = new AbortController();
+   383→    const timer = setTimeout(() => controller.abort(), 8000);
+   384→    const res = await fetch(url, {
+   385→      cache: "no-store",
+   386→      signal: controller.signal,
+   387→      headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/126.0" },
+   388→    });
+   389→    clearTimeout(timer);
+   390→    if (!res.ok) return "";
+   391→    const body = (await res.json()) as {
+   392→      url?: string;
+   393→      signedUrl?: string;
+   394→      data?: { url?: string; signedUrl?: string };
+   395→    };
+   396→    const signed = body.signedUrl || body.data?.signedUrl || "";
+   397→    if (signed) return signed.startsWith("?") ? signed : `?${signed}`;
+   398→    // a signed absolute URL works too — peel off its query
+   399→    const abs = body.url || body.data?.url || "";
+   400→    if (abs.includes("Signature=")) {
+   401→      const q = abs.slice(abs.indexOf("?"));
+   402→      return q;
+   403→    }
+   404→    return "";
+   405→  } catch {
+   406→    return "";
+   407→  }
+   408→}
+   409→
+   410→/** Per-folder memo for the env signing service (only successes are kept). */
+   411→const envSigMemo = new Map<string, MemoEntry>();
+   412→
+   413→async function envSignerSignedQueryCached(
+   414→  folder: string,
+   415→  batchId: string,
+   416→  videoId: string,
+   417→  subjectId: string,
+   418→): Promise<string> {
+   419→  const hit = memoGet(envSigMemo, `es:${folder}`);
+   420→  if (hit) return hit.value as string;
+   421→  const signed = await envSignerSignedQuery(batchId, videoId, subjectId);
+   422→  if (signed) memoSet(envSigMemo, `es:${folder}`, signed, 10 * 60_000);
+   423→  return signed;
+   424→}
+   425→
+   426→/** Resolve the folder-wide signed query for a video through the whole chain. */
+   427→async function resolveSignedQuery(
+   428→  folder: string,
+   429→  opts: { batchId: string; videoId: string; subjectId: string; signedUrl?: string },
+   430→): Promise<string> {
+   431→  if (opts.signedUrl) {
+   432→    registerSignedFolder(folder, opts.signedUrl);
+   433→    return opts.signedUrl.startsWith("?") ? opts.signedUrl : `?${opts.signedUrl}`;
+   434→  }
+   435→  // 1) Non-expired LOCAL signatures first — zero network, saves the env
+   436→  //    signer roundtrip (1-12s) on every cold load of a known folder.
+   437→  const local =
+   438→    nonExpiredQuery(getFallbackSignedQuery(folder)) ||
+   439→    nonExpiredQuery(lookupStoredSignature(folder)) ||
+   440→    nonExpiredQuery(getSignedQuery(folder));
+   441→  if (local) {
+   442→    registerSignedFolder(folder, local);
+   443→    return local;
+   444→  }
+   445→  // 2) Env signing service (memoized per folder, 8s cap).
+   446→  const envSig = await envSignerSignedQueryCached(folder, opts.batchId, opts.videoId, opts.subjectId);
+   447→  if (envSig) {
+   448→    registerSignedFolder(folder, envSig);
+   449→    return envSig;
+   450→  }
+   451→  // Nothing usable — let the caller decide (upstream signedUrl retry, error).
+   452→  return "";
+   453→}
+   454→
+   455→/**
+   456→ * Same-origin relay URL for a resolved CloudFront asset — keeps the REAL
+   457→ * manifest path from the upstream url (e.g. hls/720/main.m3u8, master.mpd)
+   458→ * instead of guessing, and carries the signature statelessly in the path.
+   459→ */
+   460→async function relayUrlFor(
+   461→  rawUrl: string,
+   462→  opts: { batchId: string; videoId: string; subjectId: string; signedUrl?: string },
+   463→): Promise<{ url: string; signedQuery: string } | null> {
+   464→  const host = hostFromUrl(rawUrl);
+   465→  const folder = folderFromUrl(rawUrl);
+   466→  const sub = subPathFromUrl(rawUrl);
+   467→  if (!folder || !sub) return null;
+   468→  const signedQuery = await resolveSignedQuery(folder, { ...opts, signedUrl: opts.signedUrl || "" });
+   469→  if (host) registerFolderHost(folder, host);
+   470→  if (!signedQuery) return null;
+   471→  const sig = sigPathSegment(signedQuery);
+   472→  const hostSeg = host && host !== "d1d34p8vz63oiq.cloudfront.net" ? `/h/${host}` : "";
+   473→  return { url: `/api/pw${hostSeg}/${folder}${sig ? `/s/${sig}` : ""}/${sub}`, signedQuery };
+   474→}
+   475→
+   476→/**
+   477→ * ClearKey cache — the KID and keys are stable per video folder, but probing
+   478→ * the manifest through the lane chain + otp can cost up to ~30s. Memoize per
+   479→ * folder (60 min for keys, 60s negative) with single-flight.
+   480→ */
+   481→const folderKeysMemo = new Map<string, MemoEntry>();
+   482→const folderKeysInflight = new Map<string, Promise<Record<string, string> | null>>();
+   483→
+   484→async function clearKeysForFolder(
+   485→  folder: string,
+   486→  host: string,
+   487→  manifestPath: string,
+   488→  signedQuery: string,
+   489→): Promise<Record<string, string> | null> {
+   490→  if (!folder) return null;
+   491→  const hit = memoGet(folderKeysMemo, `ck:${folder}`);
+   492→  if (hit) return hit.value as Record<string, string> | null;
+   493→  const running = folderKeysInflight.get(folder);
+   494→  if (running) return running;
+   495→  const p = (async () => {
+   496→    try {
+   497→      // Probe the manifest through the same upstream lane chain the relay
+   498→      // uses (delta → pearl → direct) to extract the ClearKey KID. 8s per
+   499→      // lane keeps a dead-lane worst case bounded.
+   500→      const mpdRes = await fetchSignedAsset(host, manifestPath, signedQuery, { timeoutMs: 8000 });
+   501→      if (!mpdRes.ok) return null;
+   502→      const text = await mpdRes.text();
+   503→      const kidMatch = text.match(/default_KID="([0-9a-fA-F-]+)"/);
+   504→      if (!kidMatch) return null;
+   505→      const keys = await lxOtp(kidMatch[1]);
+   506→      if (keys && Object.keys(keys).length > 0) {
+   507→        memoSet(folderKeysMemo, `ck:${folder}`, keys, 60 * 60_000);
+   508→        return keys;
+   509→      }
+   510→      // keys unavailable right now — brief negative cache so a retry soon
+   511→      // after isn't blocked, but the next cold load re-probes.
+   512→      memoSet(folderKeysMemo, `ck:${folder}`, null, 60_000);
+   513→      return null;
+   514→    } catch {
+   515→      return null;
+   516→    } finally {
+   517→      folderKeysInflight.delete(folder);
+   518→    }
+   519→  })();
+   520→  folderKeysInflight.set(folder, p);
+   521→  return p;
+   522→}
+   523→
+   524→type VideoPayload = {
+   525→  kind: "dash" | "hls" | "youtube" | "mp4";
+   526→  url: string;
+   527→  signedUrl: string;
+   528→  clearKeys: Record<string, string> | null;
+   529→  poster: string;
+   530→  drmDetails: null;
+   531→};
+   532→
+   533→/** Build a same-origin playable payload for a resolved manifest/file url. */
+   534→async function payloadFromRawUrl(
+   535→  rawUrl: string,
+   536→  upstreamSignedUrl: string,
+   537→  sigOpts: { batchId: string; videoId: string; subjectId: string },
+   538→): Promise<VideoPayload | null> {
+   539→  const url = rawUrl.trim();
+   540→  if (!url) return null;
+   541→  if (/\.mpd(\?|$)/i.test(url)) {
+   542→    const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: upstreamSignedUrl });
+   543→    if (!relay) return null;
+   544→    let clearKeys: Record<string, string> | null = null;
+   545→    try {
+   546→      const u = new URL(url);
+   547→      const folder = folderFromUrl(url);
+   548→      clearKeys = await clearKeysForFolder(folder, u.host, u.pathname.replace(/^\/+/, ""), relay.signedQuery);
+   549→    } catch {
+   550→      /* keys unavailable — player will surface a decrypt error */
+   551→    }
+   552→    return { kind: "dash", url: relay.url, signedUrl: "", clearKeys, poster: "", drmDetails: null };
+   553→  }
+   554→  if (/\.m3u8(\?|$)/i.test(url)) {
+   555→    // Root-level LIVE manifest (PW live channel: https://<dist>/index.m3u8, no
+   556→    // UUID folder) → the /api/live relay, which signs it from the persistent
+   557→    // store's "live:<host>" entry (owner-pasted signed live URL).
+   558→    try {
+   559→      const u = new URL(url);
+   560→      const segs = u.pathname.split("/").filter(Boolean);
+   561→      if (segs.length === 1 && /\.cloudfront\.net$/i.test(u.host)) {
+   562→        return {
+   563→          kind: "hls",
+   564→          url: `/api/live/h/${u.host}/${segs[0]}`,
+   565→          signedUrl: "",
+   566→          clearKeys: null,
+   567→          poster: "",
+   568→          drmDetails: null,
+   569→        };
+   570→      }
+   571→    } catch {
+   572→      /* fall through to the folder-based relay */
+   573→    }
+   574→    const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: upstreamSignedUrl });
+   575→    if (!relay) return null;
+   576→    return { kind: "hls", url: relay.url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+   577→  }
+   578→  if (/youtube\.com|youtu\.be/i.test(url)) {
+   579→    return { kind: "youtube", url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+   580→  }
+   581→  // plain file (mp4 etc.) inside the signed folder
+   582→  const relay = await relayUrlFor(url, { ...sigOpts, signedUrl: upstreamSignedUrl });
+   583→  if (!relay) return null;
+   584→  return { kind: "mp4", url: relay.url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+   585→}
+   586→
+   587→/** Resolve a video → same-origin playable payload (dash/hls/youtube/mp4). */
+   588→async function resolveVideoPayload(
+   589→  childId: string,
+   590→  batchId: string,
+   591→  subjectId: string,
+   592→  vUrlParam = "",
+   593→  realVideoId = "",
+   594→) {
+   595→  const sigOpts = { batchId, videoId: realVideoId || childId, subjectId };
+   596→  const direct = vUrlParam.trim();
+   597→
+   598→  // FAST PATH: the lecture list already carries the CloudFront manifest url
+   599→  // (v2 merge). Skip the slow upstream video-url roundtrip entirely and sign
+   600→  // from local/env sources; only when no signature is available do we fall
+   601→  // through to the full chain below.
+   602→  if (direct && /\.cloudfront\.net/i.test(direct)) {
+   603→    const fast = await payloadFromRawUrl(direct, "", sigOpts);
+   604→    if (fast) return fast;
+   605→  }
+   606→
+   607→  let vid = await lxVideoUrl(batchId, subjectId, childId).catch(() => null);
+   608→  if (!vid && realVideoId && realVideoId !== childId) {
+   609→    vid = await lxVideoUrl(batchId, subjectId, realVideoId).catch(() => null);
+   610→  }
+   611→  const rawUrl = vid?.url?.trim() || direct;
+   612→  if (rawUrl) {
+   613→    const payload = await payloadFromRawUrl(rawUrl, vid?.signedUrl || "", sigOpts);
+   614→    if (payload) return payload;
+   615→  }
+   616→
+   617→  // No video-doc stream — the SCHEDULE itself may carry the manifest. Live
+   618→  // classes (urlType awsVideo) keep an UNSIGNED CloudFront HLS url here and
+   619→  // have no video doc at all; past live classes keep their replay url. The
+   620→  // schedule url is the only remaining source — use it for every kind
+   621→  // (youtube / m3u8 / mpd / mp4), not just youtube.
+   622→  if (subjectId) {
+   623→    const detail = await lxScheduleDetail(batchId, subjectId, childId).catch(() => null);
+   624→    const schedUrl = (detail as { url?: string } | null)?.url || "";
+   625→    if (schedUrl && /^https?:\/\//i.test(schedUrl.trim())) {
+   626→      const payload = await payloadFromRawUrl(schedUrl.trim(), "", sigOpts);
+   627→      if (payload) return payload;
+   628→      // youtube schedules stay a direct passthrough even if nothing resolved
+   629→      if (/youtube\.com|youtu\.be/i.test(schedUrl)) {
+   630→        return { kind: "youtube", url: schedUrl.trim(), signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
+   631→      }
+   632→    }
+   633→  }
+   634→  return null;
+   635→}
+   636→
+   637→/**
+   638→ * Memoized entry point for the parcham_vid action.
+   639→ *  - full payload .............. 10 min
+   640→ *  - dash without clearKeys ..... 45s (probe failed — retry soon)
+   641→ *  - unavailable (null) ......... 30s negative cache (no upstream hammering)
+   642→ * Concurrent identical requests share one in-flight resolution.
+   643→ */
+   644→const videoMemo = new Map<string, MemoEntry>();
+   645→const videoInflight = new Map<string, Promise<VideoPayload | null>>();
+   646→
+   647→async function resolveVideoPayloadCached(
+   648→  childId: string,
+   649→  batchId: string,
+   650→  subjectId: string,
+   651→  vUrlParam = "",
+   652→  realVideoId = "",
+   653→): Promise<VideoPayload | null> {
+   654→  const key = `${batchId}|${subjectId}|${childId}|${realVideoId}|${(vUrlParam || "").split("?")[0]}`;
+   655→  const hit = memoGet(videoMemo, key);
+   656→  if (hit) return hit.value as VideoPayload | null;
+   657→  const running = videoInflight.get(key);
+   658→  if (running) return running;
+   659→  const p = (async () => {
+   660→    try {
+   661→      const value = await resolveVideoPayload(childId, batchId, subjectId, vUrlParam, realVideoId);
+   662→      const hasKeys = value?.kind === "dash" ? !!value.clearKeys : true;
+   663→      const ttl = !value ? 30_000 : hasKeys ? 10 * 60_000 : 45_000;
+   664→      memoSet(videoMemo, key, value, ttl);
+   665→      return value;
+   666→    } finally {
+   667→      videoInflight.delete(key);
+   668→    }
+   669→  })();
+   670→  videoInflight.set(key, p);
+   671→  return p;
+   672→}
+   673→
+   674→// ---------------------------------------------------------------------------
+   675→// POST /api/data — action API (real upstream data, transformed)
+   676→// ---------------------------------------------------------------------------
+   677→export async function POST(request: NextRequest) {
+   678→  try {
+   679→    const body = (await request.json().catch(() => ({}))) as ActionBody;
+   680→    const action = typeof body.action === "string" ? body.action : "";
+   681→    const params = asParams(body.params);
+   682→    const payload = parsePayload(body.payload);
+   683→
+   684→    switch (action) {
+   685→      case "pw_btch_dtl": {
+   686→        const batchId = str(params.batchId).trim();
+   687→        if (!batchId) return NextResponse.json({ success: false }, { headers: CORS_HEADERS });
+   688→        const d = await lxBatchDetails(batchId);
+   689→        if (!d) return NextResponse.json({ success: false }, { headers: CORS_HEADERS });
+   690→
+   691→        const exams = Array.isArray(d.exam)
+   692→          ? (d.exam as unknown[])
+   693→              .map((e) => (typeof e === "string" ? e : (e as { name?: string })?.name || ""))
+   694→              .filter(Boolean)
+   695→          : [];
+   696→        const subjects = Array.isArray(d.subjects) ? d.subjects : [];
+   697→        return NextResponse.json(
+   698→          {
+   699→            success: true,
+   700→            data: {
+   701→              _id: d._id || batchId,
+   702→              id: d.slug || batchId,
+   703→              name: d.name || "Batch",
+   704→              byName: d.byName || "",
+   705→              description: typeof d.description === "string" ? d.description : "",
+   706→              imageUrl: d.previewImage || d.previewImageUrl || "",
+   707→              exams,
+   708→              language: d.language || "",
+   709→              className:
+   710→                typeof d.class === "string"
+   711→                  ? d.class
+   712→                  : Array.isArray(d.class)
+   713→                    ? (d.class as unknown[]).map((c) => String(c)).join(", ")
+   714→                    : "",
+   715→              amount: typeof d.feeTotal === "number" ? d.feeTotal : null,
+   716→              startDate: d.startDate || "",
+   717→              endDate: d.endDate || "",
+   718→              // subject mapping — subjectId = SLUG (SubjectInfo/TopicInfo are
+   719→              // slug-addressed), batchSubjectId & masterId for dpp/schedule apis
+   720→              subjects: subjects.map((s) => ({
+   721→                _id: s.slug || s.subjectId || s._id || "",
+   722→                subject: s.subject || "",
+   723→                subjectId: s.slug || s.subjectId || "",
+   724→                batchSubjectId: s._id || "",
+   725→                masterId: s.subjectId || "",
+   726→              })),
+   727→            },
+   728→          },
+   729→          { headers: CORS_HEADERS },
+   730→        );
+   731→      }
+   732→
+   733→      case "pw_sub_topics": {
+   734→        const batchId = str(params.batchId).trim();
+   735→        const subjectId = str(params.subjectId).trim();
+   736→        const page = num(params.page, 1);
+   737→        if (!batchId || !subjectId) {
+   738→          return NextResponse.json({ success: true, data: { data: [] } }, { headers: CORS_HEADERS });
+   739→        }
+   740→        try {
+   741→          const chapters = await lxChapters(batchId, subjectId, page);
+   742→          const data = chapters.map((c, i) => ({
+   743→            _id: c._id || "",
+   744→            name: c.name || "Chapter",
+   745→            typeId: subjectId,
+   746→            notes: Number(c.notes || 0),
+   747→            videos: Number(c.videos || c.lectureVideos || 0),
+   748→            exercises: Number(c.exercises || 0),
+   749→            order: Number.isFinite(c.displayOrder) ? Number(c.displayOrder) : i,
+   750→          }));
+   751→          return NextResponse.json({ success: true, data: { data } }, { headers: CORS_HEADERS });
+   752→        } catch {
+   753→          return NextResponse.json({ success: true, data: { data: [] } }, { headers: CORS_HEADERS });
+   754→        }
+   755→      }
+   756→
+   757→      case "pw_res_topics":
+   758→        // upstream has no separate resource folders
+   759→        return NextResponse.json({ success: true, data: { data: [] } }, { headers: CORS_HEADERS });
+   760→
+   761→      case "pw_sch_cntnt": {
+   762→        const batchId = str(params.batchId).trim();
+   763→        const subjectId = str(params.subjectId).trim();
+   764→        const tagId = str(params.tagId).trim();
+   765→        const contentType = str(params.contentType, "ALL");
+   766→        const page = num(params.page, 1);
+   767→        if (!batchId || !subjectId || !tagId) {
+   768→          return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
+   769→        }
+   770→        const kind = resolveContentKind(contentType);
+   771→        if (!kind) return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
+   772→        try {
+   773→          const items = await lxTopicContent(batchId, subjectId, tagId, upstreamContentType(contentType), page);
+   774→          const nodes = contentNodesFromItems(batchId, subjectId, items, kind);
+   775→          if (kind === "LECTURE" || kind === "DPP_VIDEOS") {
+   776→            // Magic merge: inject the direct V2 video urls into the nodes so
+   777→            // the player can resolve a stream even when video-url is gated.
+   778→            const v2 = await v2DirectUrls(batchId, subjectId, tagId);
+   779→            if (v2.size > 0) {
+   780→              for (const n of nodes) {
+   781→                const hit = v2.get(n._id);
+   782→                if (!hit) continue;
+   783→                const d = n.data as Record<string, unknown>;
+   784→                d.url = hit.url;
+   785→                const vd = d.videoDetails as Record<string, unknown> | undefined;
+   786→                if (vd) {
+   787→                  vd.videoUrl = hit.url;
+   788→                  if (hit.videoId) vd._id = hit.videoId;
+   789→                }
+   790→              }
+   791→            }
+   792→          }
+   793→          return NextResponse.json({ success: true, data: nodes }, { headers: CORS_HEADERS });
+   794→        } catch {
+   795→          return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
+   796→        }
+   797→      }
+   798→
+   799→      case "pw_dpp_lst": {
+   800→        const batchId = str(params.batchId).trim();
+   801→        const batchSubjectId = str(params.batchSubjectId).trim();
+   802→        const chapterId = str(params.chapterId).trim();
+   803→        const page = num(params.page, 1);
+   804→        const limit = num(params.limit, 20);
+   805→        if (!batchId || !batchSubjectId || !chapterId) {
+   806→          return NextResponse.json({ success: true, data: { data: [] } }, { headers: CORS_HEADERS });
+   807→        }
+   808→        try {
+   809→          const items = await lxDppList(batchId, batchSubjectId, chapterId, page, limit);
+   810→          const data = items
+   811→            .map((it) => {
+   812→              const q = it.dppQuizDetails;
+   813→              const t = q?.test;
+   814→              if (!t?._id) return null;
+   815→              return {
+   816→                _id: t._id,
+   817→                name: t.name || "DPP",
+   818→                totalQuestions: Number(t.totalQuestions || 0),
+   819→                totalMarks: Number(t.totalMarks || 0),
+   820→                duration: Number(t.maxDuration || 0) * 60 || 1800,
+   821→                testActivityStatus: "Not Started",
+   822→                testStudentMapping: null,
+   823→                dppQuizDetails: {
+   824→                  contentId: q?.contentId || t._id,
+   825→                  scheduleId: q?.scheduleId || "",
+   826→                  test: {
+   827→                    _id: t._id,
+   828→                    name: t.name || "DPP",
+   829→                    totalQuestions: Number(t.totalQuestions || 0),
+   830→                    totalMarks: Number(t.totalMarks || 0),
+   831→                  },
+   832→                  testStudentMapping: { testActivityStatus: q?.tag || "Start" },
+   833→                },
+   834→              };
+   835→            })
+   836→            .filter(Boolean);
+   837→          return NextResponse.json({ success: true, data: { data } }, { headers: CORS_HEADERS });
+   838→        } catch {
+   839→          return NextResponse.json({ success: true, data: { data: [] } }, { headers: CORS_HEADERS });
+   840→        }
+   841→      }
+   842→
+   843→      case "pw_dpp_start": {
+   844→        // Auth-gated upstream: anonymous calls fail → surfaced honestly.
+   845→        const testId = str(params.testId).trim();
+   846→        const batchId = str(params.batchId).trim();
+   847→        if (!testId || !batchId) {
+   848→          return NextResponse.json(
+   849→            { success: false, error: "testId and batchId are required" },
+   850→            { headers: CORS_HEADERS },
+   851→          );
+   852→        }
+   853→        try {
+   854→          const data = await lxStartDpp({
+   855→            testId,
+   856→            batchId,
+   857→            type: str(params.type, "Start"),
+   858→            scheduleId: str(params.scheduleId),
+   859→            batchScheduleId: str(params.batchScheduleId) || str(params.scheduleId),
+   860→            subjectId: str(params.subjectId),
+   861→          });
+   862→          return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
+   863→        } catch (e) {
+   864→          return NextResponse.json(
+   865→            { success: false, error: e instanceof Error ? e.message : "Failed to start DPP" },
+   866→            { headers: CORS_HEADERS },
+   867→          );
+   868→        }
+   869→      }
+   870→
+   871→      case "pw_test_lst": {
+   872→        const batchId = str(params.batchId).trim();
+   873→        if (!batchId) return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
+   874→        try {
+   875→          const tests = await lxBatchTests(batchId);
+   876→          const data = tests.map((t) => {
+   877→            const o = t as Record<string, unknown>;
+   878→            return {
+   879→              _id: str(o._id),
+   880→              name: str(o.name, "Test"),
+   881→              totalQuestions: Number(o.totalQuestions || 0),
+   882→              totalMarks: Number(o.totalMarks || 0),
+   883→              duration: Number(o.maxDuration || 0) * 60 || 3600,
+   884→              startTime: str(o.startTime),
+   885→              testActivityStatus: "Not Started",
+   886→              testStudentMapping: null,
+   887→              tag2: str(o.tag2, "Start"),
+   888→            };
+   889→          });
+   890→          return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
+   891→        } catch {
+   892→          return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
+   893→        }
+   894→      }
+   895→
+   896→      case "pw_test_dtl": {
+   897→        const testId = str(params.testId).trim();
+   898→        const batchId = str(params.batchId).trim();
+   899→        if (!testId || !batchId) {
+   900→          return NextResponse.json({ success: true, data: null }, { headers: CORS_HEADERS });
+   901→        }
+   902→        const data = await lxTestInstructions(testId, batchId);
+   903→        return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
+   904→      }
+   905→
+   906→      case "pw_sch_dtl": {
+   907→        const batchId = str(params.batchId).trim();
+   908→        const scheduleId = str(params.scheduleId).trim();
+   909→        const subjectId = str(params.subjectId).trim();
+   910→        if (!batchId || !scheduleId || !subjectId) {
+   911→          return NextResponse.json({ success: true, data: null }, { headers: CORS_HEADERS });
+   912→        }
+   913→        const detail = await lxScheduleDetail(batchId, subjectId, scheduleId);
+   914→        if (!detail) return NextResponse.json({ success: true, data: null }, { headers: CORS_HEADERS });
+   915→
+   916→        const homeworkIds = [...asArray(detail.homeworkIds), ...asArray(detail.dpp?.homeworkIds)]
+   917→          .flatMap((hw) => {
+   918→            const h = hw as { _id?: string; topic?: string; attachmentIds?: unknown[] };
+   919→            return asArray(h.attachmentIds).map((att) => {
+   920→              const a = att as { _id?: string; key?: string; baseUrl?: string };
+   921→              if (!a?._id) return null;
+   922→              const direct = a.baseUrl && a.key ? `${a.baseUrl}${a.key}` : "";
+   923→              const ref = direct
+   924→                ? { baseUrl: direct, key: "", _id: a._id }
+   925→                : pdfAttachmentRef(batchId, subjectId, detail._id || scheduleId, a._id);
+   926→              return { _id: h._id || "", topic: h.topic || "Class Note", attachmentIds: [ref] };
+   927→            });
+   928→          })
+   929→            .filter(Boolean) as Array<Record<string, unknown>>;
+   930→
+   931→        return NextResponse.json(
+   932→          {
+   933→            success: true,
+   934→            data: {
+   935→              _id: detail._id || scheduleId,
+   936→              topic: detail.topic || detail.name || "",
+   937→              startTime: detail.startTime || "",
+   938→              endTime: detail.endTime || "",
+   939→              urlType: detail.urlType || "",
+   940→              homeworkIds,
+   941→              exerciseIds: [],
+   942→            },
+   943→          },
+   944→          { headers: CORS_HEADERS },
+   945→        );
+   946→      }
+   947→
+   948→      case "pw_tdy_sch": {
+   949→        const batchId = str(params.batchId).trim();
+   950→        if (!batchId) return NextResponse.json({ success: true, data: [] }, { headers: CORS_HEADERS });
+   951→        const items = await lxTodaySchedule(batchId);
+   952→        const data = items.map((it) => scheduleEventNode(batchId, it));
+   953→        return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
+   954→      }
+   955→
+   956→      case "pw_notifs": {
+   957→        const batchId = str(params.batchId).trim();
+   958→        const page = num(params.page, 1);
+   959→        if (!batchId) {
+   960→          return NextResponse.json({ success: true, data: [], hasMore: false }, { headers: CORS_HEADERS });
+   961→        }
+   962→        const anns = await lxBatchAnnouncements(batchId, page);
+   963→        const data = anns.map((a) => {
+   964→          const o = a as Record<string, unknown>;
+   965→          return {
+   966→            _id: str(o._id),
+   967→            type: str(o.type, "GENERAL"),
+   968→            heading: str(o.announcement, "").slice(0, 80),
+   969→            announcement: str(o.announcement, ""),
+   970→            scheduleTime: str(o.createdAt || o.updatedAt),
+   971→            isRead: false,
+   972→          };
+   973→        });
+   974→        return NextResponse.json({ success: true, data, hasMore: anns.length >= 20 }, { headers: CORS_HEADERS });
+   975→      }
+   976→
+   977→      case "pw_tchr_dtl":
+   978→        return NextResponse.json({ success: true, data: null }, { headers: CORS_HEADERS });
+   979→
+   980→      case "parcham_vid": {
+   981→        const childId = str(params.childId).trim();
+   982→        const batchId = str(params.batchId).trim();
+   983→        const subjectId = str(params.subjectId).trim();
+   984→        const vUrl = str(params.vUrl).trim();
+   985→        const realVideoId = str(params.videoId).trim();
+   986→        if (!childId || !batchId || !subjectId) {
+   987→          return NextResponse.json({ success: false }, { headers: CORS_HEADERS });
+   988→        }
+   989→        try {
+   990→          const data = await resolveVideoPayloadCached(childId, batchId, subjectId, vUrl, realVideoId);
+   991→          if (!data) {
+   992→            return NextResponse.json(
+   993→              {
+   994→                success: false,
+   995→                error:
+   996→                  "Stream unavailable — every upstream signing source is gated for this batch. If you have a signed lecture URL, paste it below to unlock playback.",
+   997→              },
+   998→              { headers: CORS_HEADERS },
+   999→            );
+  1000→          }
+  1001→          return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
+  1002→        } catch (e) {
+  1003→          return NextResponse.json(
+  1004→            { success: false, error: e instanceof Error ? e.message : "Stream resolution failed" },
+  1005→            { headers: CORS_HEADERS },
+  1006→          );
+  1007→        }
+  1008→      }
+  1009→
+  1010→      case "pw_test_map": {
+  1011→        // testId may be single or array; can live in params or payload.
+  1012→        const payloadParams = asParams(payload);
+  1013→        const raw: unknown =
+  1014→          params.testId ??
+  1015→          payloadParams.testId ??
+  1016→          (Array.isArray(payload) ? payload : undefined);
+  1017→        const ids: string[] = [];
+  1018→        collectTestIds(raw, ids, new Set<string>());
+  1019→        const data = ids.map((testId) => ({
+  1020→          testId,
+  1021→          tag2: "Start",
+  1022→          testStudentMapping: {
+  1023→            _id: `map_${testId}`,
+  1024→            testActivityStatus: "Not Started",
+  1025→          },
+  1026→        }));
+  1027→        return NextResponse.json({ success: true, data }, { headers: CORS_HEADERS });
+  1028→      }
+  1029→
+  1030→      default:
+  1031→        return NextResponse.json(
+  1032→          { success: false, error: "Unknown action" },
+  1033→          { status: 400, headers: CORS_HEADERS },
+  1034→        );
+  1035→    }
+  1036→  } catch (error) {
+  1037→    return NextResponse.json(
+  1038→      { success: false, error: error instanceof Error ? error.message : String(error) },
+  1039→      { status: 500, headers: CORS_HEADERS },
+  1040→    );
+  1041→  }
+  1042→}
+  1043→
+  1044→/** Flatten test ids from scalars / arrays / objects ({testId}|{_id}|{id}). */
+  1045→function collectTestIds(source: unknown, out: string[], seen: Set<string>): void {
+  1046→  if (source === undefined || source === null) return;
+  1047→  if (Array.isArray(source)) {
+  1048→    source.forEach((item) => collectTestIds(item, out, seen));
+  1049→    return;
+  1050→  }
+  1051→  if (typeof source === "object") {
+  1052→    const o = source as Record<string, unknown>;
+  1053→    collectTestIds(o.testId ?? o._id ?? o.id, out, seen);
+  1054→    return;
+  1055→  }
+  1056→  const s = String(source).trim();
+  1057→  if (s && !seen.has(s)) {
+  1058→    seen.add(s);
+  1059→    out.push(s);
+  1060→  }
+  1061→}
+  1062→

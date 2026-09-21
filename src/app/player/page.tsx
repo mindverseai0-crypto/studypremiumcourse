@@ -325,6 +325,16 @@ function PlayerInner() {
         if (!res.success || !res.data || !res.data.url) {
           throw new Error(res.error || 'This lecture is not available right now.');
         }
+        // Honest DRM gate — Pallycon/FairPlay content cannot be decoded in a
+        // browser without PW's license server; don't start a doomed load.
+        const dd = (res.data.drmDetails || null) as { vendor?: string; reason?: string } | null;
+        if (dd && dd.reason === 'pallycon') {
+          setError(
+            "This lecture is protected by PW's Pallycon DRM (Widevine/FairPlay). The stream resolves fine, but browsers cannot decrypt it without PW's licensed player — it can't be played here.",
+          );
+          setLoading(false);
+          return;
+        }
         setKind(res.data.kind || 'mp4');
         setSrc(res.data.url);
         setClearKeys(res.data.clearKeys || null);
@@ -460,7 +470,14 @@ function PlayerInner() {
           });
           hls.on(Hls.Events.ERROR, (_evt, data) => {
             if (data.fatal) {
-              setError('Unable to load the stream. Please try again.');
+              const details = String((data as { details?: string }).details || '');
+              const drmLike =
+                data.type === Hls.ErrorTypes.KEY_SYSTEM_ERROR || /key/i.test(details);
+              setError(
+                drmLike
+                  ? 'This stream is DRM-protected (FairPlay/Widevine) and cannot be decrypted in this browser.'
+                  : 'Unable to load the stream. Please try again.',
+              );
               setLoading(false);
             }
           });

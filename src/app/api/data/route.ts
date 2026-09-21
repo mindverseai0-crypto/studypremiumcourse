@@ -27,6 +27,8 @@ import {
   fetchSignedAsset,
 } from "@/lib/pw-cdn";
 import { lookupStoredSignature, parsePolicy } from "@/lib/signature-store";
+import { nsResolveM3u8, nsRelayPlaylistUrl } from "@/lib/nextstudy";
+import { nsVideoMeta } from "@/lib/ns-api";
 
 void lxAllBatches; // catalog lives in /api/batches
 
@@ -199,7 +201,9 @@ function contentNodesFromItems(
           urlType: item.urlType || "",
           url: item.url || "",
           videoDetails: {
-            _id: item._id || "",
+            // raw video doc id (falls back to the schedule id) — the player
+            // forwards it as lectureVideoId so resolvers can address the video
+            _id: vd._id || item._id || "",
             image: vd.image || item.previewImageUrl || "",
             videoUrl: "",
             duration: vd.duration || "",
@@ -521,13 +525,15 @@ async function clearKeysForFolder(
   return p;
 }
 
+type SbDrmDetails = { vendor?: string; reason?: string } | null;
+
 type VideoPayload = {
   kind: "dash" | "hls" | "youtube" | "mp4";
   url: string;
   signedUrl: string;
   clearKeys: Record<string, string> | null;
   poster: string;
-  drmDetails: null;
+  drmDetails: SbDrmDetails;
 };
 
 /** Build a same-origin playable payload for a resolved manifest/file url. */
@@ -584,8 +590,97 @@ async function payloadFromRawUrl(
   return { kind: "mp4", url: relay.url, signedUrl: "", clearKeys: null, poster: "", drmDetails: null };
 }
 
+/**
+ * NextStudy fallback (user-directed) — for lectures/batches whose normal
+ * signing chain is gated. Resolves the real video doc id, checks Pallycon
+ * DRM via penpencil metadata, then resolves a stream through the
+ * pw-nextstudy.ai.studio API and serves it through our /api/next relay.
+ * Returns the playable payload plus what the DRM metadata told us.
+ */
+async function nextStudyFallback(
+  childId: string,
+  batchId: string,
+  subjectId: string,
+  realVideoId: string,
+): Promise<{ payload: VideoPayload | null; drm: SbDrmDetails }> {
+  // 1) real video doc id: explicit param → schedule videoDetails._id → childId
+  let videoId = realVideoId.trim();
+  let title = "";
+  if (!videoId && subjectId) {
+    const detail = await lxScheduleDetail(batchId, subjectId, childId).catch(() => null);
+    const vd = (detail as { videoDetails?: { _id?: string } } | null)?.videoDetails;
+    if (vd?._id) videoId = vd._id;
+    title = (detail as { topic?: string } | null)?.topic || "";
+  }
+  const vid = videoId || childId;
+
+  // 2) DRM knowledge — Pallycon FairPlay/Widevine content cannot be decoded
+  //    in browsers without PW's license server; detect it up front.
+  let drm: SbDrmDetails = null;
+  try {
+    const meta = await nsVideoMeta(vid);
+    if (meta?.drmProtected) drm = { vendor: "Pallycon", reason: "pallycon" };
+  } catch {
+    /* metadata unavailable — proceed */
+  }
+
+  // 3) user-directed resolver (memoized server-side)
+  const ns = await nsResolveM3u8({
+    videoId: vid,
+    scheduleId: childId,
+    batchId,
+    subjectId,
+    title,
+  }).catch(() => null);
+  if (!ns) return { payload: null, drm };
+
+  // 4) signed-lane first — the existing /api/pw relay keeps the better UX
+  //    (offline downloads, ClearKey DASH) whenever a signature IS available.
+  if (!drm && ns.streamUrl) {
+    const signed = await payloadFromRawUrl(ns.streamUrl, "", {
+      batchId,
+      videoId: vid,
+      subjectId,
+    }).catch(() => null);
+    if (signed) return { payload: signed, drm };
+  }
+
+  // 5) their own proxy playlist through our same-origin relay
+  const relay = ns.m3u8Url ? nsRelayPlaylistUrl(ns.m3u8Url) : null;
+  if (relay) {
+    return {
+      payload: { kind: "hls", url: relay, signedUrl: "", clearKeys: null, poster: "", drmDetails: drm },
+      drm,
+    };
+  }
+  return { payload: null, drm };
+}
+
+/** A payload is "working" when it is not a doomed keyless DASH attempt. */
+function payloadWorking(p: VideoPayload | null): boolean {
+  return !!p && (p.kind !== "dash" || !!p.clearKeys);
+}
+
 /** Resolve a video → same-origin playable payload (dash/hls/youtube/mp4). */
 async function resolveVideoPayload(
+  childId: string,
+  batchId: string,
+  subjectId: string,
+  vUrlParam = "",
+  realVideoId = "",
+) {
+  const core = await resolveVideoPayloadCore(childId, batchId, subjectId, vUrlParam, realVideoId);
+  if (payloadWorking(core)) return core;
+  // NextStudy fallback for non-working lectures/batches (user-directed).
+  const ns = await nextStudyFallback(childId, batchId, subjectId, realVideoId).catch(() => null);
+  if (ns?.payload) return ns.payload;
+  // DRM known but nothing playable via the fallback → mark the core payload
+  // so the player can show the honest DRM message instead of a doomed load.
+  if (ns?.drm && core) return { ...core, drmDetails: ns.drm };
+  return core;
+}
+
+async function resolveVideoPayloadCore(
   childId: string,
   batchId: string,
   subjectId: string,
