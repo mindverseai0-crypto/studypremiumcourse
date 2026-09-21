@@ -45,10 +45,11 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <link
-          href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"
-          rel="stylesheet"
-        />
+        {/* Font Awesome self-hosted (public/vendor/fontawesome) — identical
+            6.4.0 build the CDN served, but the service worker can cache it so
+            icons keep rendering offline instead of turning into tofu boxes */}
+        {/* eslint-disable-next-line @next/next/no-css-tags */}
+        <link href="/vendor/fontawesome/css/all.min.css" rel="stylesheet" />
       </head>
       <body className={`${inter.variable} sb-app antialiased`}>
         {children}

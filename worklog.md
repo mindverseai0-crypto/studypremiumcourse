@@ -606,3 +606,20 @@ Stage Summary:
 - Offline mode complete: Downloads is the default section offline, warning banner + back-online chip present, and the user's enrolled batches + all their content (subjects/chapters/lectures/notes/DPPs/tests) stay browsable offline through the new app-data cache
 - Every lecture download now bundles its Notes + DPP PDFs (docs phase in the download engine, relay-based, resume-safe, non-fatal per file) and they open offline in the player's Notes/Attachments tabs via the service worker
 - Key insight for future work: static.pw.live requires a real browser UA (generic bots get 403); doc relay is whitelisted to cloudfront/pw.live only
+---
+Task ID: offline-icons
+Agent: Z.ai Code (main)
+Task: "Icons are converted into square boxes in offline mode; fix it, don't change icons."
+
+Work Log:
+- Root cause: layout.tsx loaded Font Awesome 6.4.0 from cdnjs.cloudflare.com; sw.js explicitly passes all cross-origin requests through ("if (url.origin !== self.location.origin) return") and next/font Inter is self-hosted but FA was the ONLY cross-origin UI asset — offline, the FA CSS + webfonts failed and every fa-* glyph (Private Use Area codepoints no system font has) rendered as tofu squares. All fa-* usage confirmed in player/live/studybison-app/sr-browser
+- Fix = self-host the IDENTICAL 6.4.0 build (zero icon changes): downloaded css/all.min.css (102KB) + webfonts fa-solid-900/fa-regular-400/fa-brands-400/fa-v4compatibility (.woff2+.ttf, ~955KB total) from cdnjs into public/vendor/fontawesome/{css,webfonts}/ — directory mirrors the CDN layout so the CSS's relative url(../webfonts/…) refs work unmodified; verified all 8 url() refs resolve locally
+- layout.tsx: stylesheet link now /vendor/fontawesome/css/all.min.css (+ eslint-disable for @next/next/no-css-tags, same warning the CDN link already triggered); cdnjs reference fully removed
+- sw.js: SHELL bumped sb-shell-v2→v3; SHELL_URLS precaches the CSS + all 4 woff2 files (woff2 is all modern browsers fetch; TTFs shipped but not precached); new branch 1e before navigations — same-origin /vendor/fontawesome/* is cache-first from the shell cache (caches.match global), network + cache-put fallback, 504 offline; immutable assets so repeat online loads skip the network for the font too
+- bun run lint clean (0 errors 0 warnings); dev server hot-picked-up changes; curl confirms /vendor assets 200 with text/css + font/woff2 MIME
+- E2E (agent-browser): online open → SW v3 ready + caches.has('sb-shell-v3') true + all 5 vendor entries precached + local link present + zero cdnjs links in DOM; online reload (chunks into runtime) → set offline on → reload → navigator.onLine=false, document.fonts.check('900 16px "Font Awesome 6 Free"')=true (solid style = every fas icon), forced load of regular+brands also true from cached woff2, performance entries show 0 cdnjs fetches; screenshots: home lands on downloads-view with offline banner — plane-up/bars-staggered/bolt/arrow-left/cloud-arrow-down/hard-drive/cloud empty-state ALL render as glyphs (no boxes); drawer shows book-open/compass/download/times/code glyphs; zero page errors; offline off + browser closed
+
+Stage Summary:
+- Offline icon rendering fixed without touching a single icon: identical Font Awesome 6.4.0 assets are now self-hosted and served cache-first from the SW precache, so all fa-* glyphs (solid+regular+brands) render offline everywhere (home, drawer, player, live)
+- Cross-origin asset audit result: FA was the last uncached cross-origin UI dependency — next/font Inter (self-hosted via /_next/static), PW thumbnails (SW images cache), avatars (/api/avatar) were already offline-safe
+- Note for future agents: the font files live in public/vendor/fontawesome (NOT bundled); if FA is ever upgraded, mirror the same css/webfonts structure and re-precache the woff2 set in sw.js SHELL_URLS

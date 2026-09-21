@@ -11,7 +11,7 @@
      Requests for folders with no cache are passed straight to the network.
    ============================================================================ */
 
-const SHELL = 'sb-shell-v2';
+const SHELL = 'sb-shell-v3';
 const RUNTIME = 'sb-runtime-v2';
 const IMAGES = 'sb-images-v1';
 const SHELL_URLS = [
@@ -21,6 +21,13 @@ const SHELL_URLS = [
   '/logo-bison.png',
   '/pwa-icon-192.png',
   '/pwa-icon-512.png',
+  // self-hosted Font Awesome (woff2 set is all modern browsers fetch) so
+  // icons keep rendering offline instead of turning into tofu boxes
+  '/vendor/fontawesome/css/all.min.css',
+  '/vendor/fontawesome/webfonts/fa-solid-900.woff2',
+  '/vendor/fontawesome/webfonts/fa-regular-400.woff2',
+  '/vendor/fontawesome/webfonts/fa-brands-400.woff2',
+  '/vendor/fontawesome/webfonts/fa-v4compatibility.woff2',
 ];
 const RUNTIME_LIMIT = 200;
 const IMAGES_LIMIT = 150;
@@ -235,6 +242,33 @@ self.addEventListener('fetch', (event) => {
 
   if (url.origin !== self.location.origin) return; // other hosts: browser default
 
+  // ---- 1e. self-hosted vendor assets (Font Awesome): immutable, so
+  //          cache-first from the shell cache (precached at install) —
+  //          no network round-trip for the font on repeat loads either ----
+  if (url.pathname.startsWith('/vendor/fontawesome/')) {
+    event.respondWith(
+      (async () => {
+        const cached = await caches.match(req);
+        if (cached) return cached;
+        try {
+          const fresh = await fetch(req);
+          if (fresh && fresh.ok) {
+            try {
+              const cache = await caches.open(SHELL);
+              await cache.put(req, fresh.clone());
+            } catch (_) {
+              /* ignore */
+            }
+          }
+          return fresh;
+        } catch (_) {
+          return new Response('', { status: 504 });
+        }
+      })(),
+    );
+    return;
+  }
+
   // ---- 2. navigations: network-first, fall back to the cache ----
   if (req.mode === 'navigate') {
     event.respondWith(
@@ -264,6 +298,7 @@ self.addEventListener('fetch', (event) => {
 
   // ---- 3. static assets + bot avatar DPs: network-first (fresh in dev,
   //         cached fallback offline) ----
+  // (vendor/fontawesome is handled above — cache-first)
   const p = url.pathname;
   const isStatic =
     p.startsWith('/_next/static/') ||
