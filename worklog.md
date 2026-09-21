@@ -623,3 +623,20 @@ Stage Summary:
 - Offline icon rendering fixed without touching a single icon: identical Font Awesome 6.4.0 assets are now self-hosted and served cache-first from the SW precache, so all fa-* glyphs (solid+regular+brands) render offline everywhere (home, drawer, player, live)
 - Cross-origin asset audit result: FA was the last uncached cross-origin UI dependency — next/font Inter (self-hosted via /_next/static), PW thumbnails (SW images cache), avatars (/api/avatar) were already offline-safe
 - Note for future agents: the font files live in public/vendor/fontawesome (NOT bundled); if FA is ever upgraded, mirror the same css/webfonts structure and re-precache the woff2 set in sw.js SHELL_URLS
+---
+Task ID: restore-local-state-8
+Agent: Z.ai Code (main)
+Task: Fix build error "Module not found: Can't resolve '@/lib/local-state'" (studybison-app.tsx:24) — EIGHTH sandbox revert loss
+
+Work Log:
+- Same casualty pattern as restores 2-7: snapshot revert deleted ONLY src/lib/local-state.ts; verified all other surfaces survived (offline.ts, offline-data.ts, bots.ts, api-client.ts, pwa-register.tsx, sw.js incl. the new offline-icons vendor branch, manifest.webmanifest, studybison-app.tsx, player/page.tsx)
+- Rebuilt byte-for-byte from the restore-local-state-3/4/5/7 hardened spec: useSyncExternalStore with module-level stable subscribe/getSnapshot/getServerSnapshot; cachedList() parses the RAW localStorage string and memoizes per raw value (MEMO_CAP 64, LRU evict, reference-stable snapshots); module-level EMPTY_LIST for SSR; per-key custom events (sb-enrolled-changed / sb-watched-changed / sb-xp-changed) + native storage event (incl. e.key===null clear() case); idempotent enroll/unenroll (write+dispatch only on real change); toggleWatched returns added:boolean; addXP writes+dispatches then shows self-contained toast
+- Toast: injects #sb-xp-toast-style + .sb-xp-toast pill (fixed bottom, safe-area-inset aware, z-index 2147483647, dark pill/amber text, translateX(-50%)), single-replace with timer clear, WAAPI 2400ms cubic-bezier(0.22,1,0.36,1) with translateX(-50%) in ALL keyframes, anim.finished guarded + 2600ms timer fallback
+- Keys unchanged: pw_enrolled_batches / pw_watched_videos / pw_xp
+- bun run lint clean; dev server hot-recovered without restart (500 → Compiled in 243ms → GET / 200, curl 41ms)
+- E2E (agent-browser, fresh profile): home 40 cards + chip "0 XP" + no error box; Enroll Now → pw_enrolled_batches=["698ad3519549b300a5e1cc6a"] + buttons flip to Study This Batch/Unenroll; Study Dashboard hydrates dropdown "Arjuna JEE 2027"; All Classes → Physics By Rajwant → CH-07 Parakram Solution 6 rows; toggle ON → .active + watched=["6a81411615283c03860c45a8"] + pw_xp=10 + toast "+10 XP · Watched Video" (captured in screenshot) + chip live "10 XP"; toggle OFF → watched=[] XP stays 10 (no double award); ON again → 20; reload → chip hydrates "20 XP"; tab2 sets pw_xp=77 → tab1 chip instantly "77 XP" via storage event; zero console/page errors
+- Test state reset (xp=0, watched=[], enrollment kept); browser closed
+
+Stage Summary:
+- Eighth restore complete — the worklog spec (restore-local-state-3/4/5/7) remains the single recovery source and produced a verified-identical module in one paste; the module is still not git-committed, so future reverts are a one-step paste from this worklog
+- Full gold path re-verified post-restore: enroll / study view / watched toggle / XP award / toast / reload hydration / cross-tab sync all green with zero errors
