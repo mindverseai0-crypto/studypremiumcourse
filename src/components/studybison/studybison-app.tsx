@@ -751,7 +751,8 @@ export default function StudyBisonApp() {
             ) : (
               <div className="row g-3">
                 {downloads.map((rec) => {
-                  const pct = rec.parts.length > 0 ? Math.round((rec.partsDone / rec.parts.length) * 100) : 0;
+                  const dlTotal = rec.partsTotal || rec.parts.length;
+                  const pct = dlTotal > 0 ? Math.round((rec.partsDone / dlTotal) * 100) : 0;
                   const isActive = rec.status === 'downloading' || rec.status === 'collecting';
                   return (
                     <div className="col-12" key={rec.id}>

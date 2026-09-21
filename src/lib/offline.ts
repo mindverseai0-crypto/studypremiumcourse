@@ -42,7 +42,8 @@ export interface SbDownload {
   poster: string;
   folder: string; // media folder id — cache name is `sb-video-<folder>`
   height: number | null; // downloaded video rendition height (null = audio-only/mp4)
-  parts: string[]; // absolute part URLs (manifest first)
+  parts: string[]; // absolute part URLs (manifest first) — NOT persisted (rebuilt on resume)
+  partsTotal: number; // persisted count for % display (parts array is stripped on save)
   partsDone: number;
   sizeBytes: number;
   status: SbDownloadStatus;
@@ -170,7 +171,13 @@ export async function getDownload(id: string): Promise<SbDownload | null> {
 
 async function putDownload(rec: SbDownload): Promise<void> {
   rec.updatedAt = new Date().toISOString();
-  await tx('readwrite', (s) => s.put(rec) as IDBRequest<IDBValidKey>);
+  // Persist WITHOUT the parts array: a 2-hour lecture carries thousands of
+  // ~100-char URLs (~0.5MB per save × every 5 parts ≈ 100s of MB of IndexedDB
+  // writes per download — a real throughput killer). The part list lives in
+  // memory while running and is re-collected from the stored manifest on
+  // resume (same sig → same URIs → cached parts still match).
+  const slim: SbDownload = { ...rec, parts: [] };
+  await tx('readwrite', (s) => s.put(slim) as IDBRequest<IDBValidKey>);
 }
 
 // ---------------------------------------------------------------------------
@@ -556,7 +563,7 @@ async function collectParts(kind: 'dash' | 'hls' | 'mp4', url: string, clearKeys
 // Download engine
 // ---------------------------------------------------------------------------
 
-const CONCURRENCY = 4;
+const CONCURRENCY = 8; // browser→CDN is HTTP/2-multiplexed; 8 lanes ≈ 2× the old 4
 const activeControllers = new Map<string, AbortController>();
 
 function sleep(ms: number): Promise<void> {
@@ -579,12 +586,12 @@ function pickHeaders(res: Response): Headers {
 export async function startDownload(spec: DownloadStartSpec): Promise<SbDownload> {
   const now = new Date().toISOString();
   const existing = await getDownload(spec.id);
-  // resumable = a healthy in-flight download whose part list matches the
-  // signed source it was collected against — keep that URL so the
-  // already-downloaded parts (absolute URLs with that signature) still match.
+  // resumable = a healthy in-flight download — keep its progress; the part
+  // list is re-collected on resume (parts are not persisted), which yields
+  // byte-identical URLs for the already-downloaded parts (same stored sig).
   const resumable = Boolean(
     existing &&
-      existing.parts.length > 0 &&
+      (existing.parts.length > 0 || existing.partsTotal > 0) &&
       (existing.status === 'paused' || existing.status === 'downloading' || existing.status === 'collecting'),
   );
   let rec: SbDownload;
@@ -595,6 +602,7 @@ export async function startDownload(spec: DownloadStartSpec): Promise<SbDownload
       folder: folderFromMediaUrl(spec.url) || spec.id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 40),
       height: null,
       parts: [],
+      partsTotal: 0,
       partsDone: 0,
       sizeBytes: 0,
       status: 'collecting',
@@ -603,7 +611,16 @@ export async function startDownload(spec: DownloadStartSpec): Promise<SbDownload
       updatedAt: now,
     };
   } else if (resumable && existing) {
-    rec = { ...existing, ...spec, url: existing.url, folder: existing.folder, updatedAt: now };
+    rec = {
+      ...existing,
+      ...spec,
+      url: existing.url,
+      folder: existing.folder,
+      parts: [],
+      partsTotal: existing.partsTotal || existing.parts.length,
+      partsDone: existing.partsDone || 0,
+      updatedAt: now,
+    };
   } else if (existing) {
     // error state — drop the stale part list and re-collect from the source
     rec = {
@@ -611,6 +628,7 @@ export async function startDownload(spec: DownloadStartSpec): Promise<SbDownload
       ...spec,
       folder: folderFromMediaUrl(spec.url) || existing.folder,
       parts: [],
+      partsTotal: 0,
       partsDone: 0,
       sizeBytes: 0,
       height: null,
@@ -644,13 +662,19 @@ async function runDownload(rec: SbDownload, ctrl: AbortController): Promise<void
       const collected = await collectParts(rec.kind, rec.url, rec.clearKeys);
       if (ctrl.signal.aborted) return;
       rec.parts = collected.parts;
+      rec.partsTotal = collected.parts.length;
       rec.height = collected.height;
       rec.url = collected.playbackUrl;
-      rec.partsDone = 0;
-      rec.sizeBytes = 0;
+      // resume: keep progress (cached parts are re-verified cheaply below);
+      // fresh/error re-collect: start from zero
+      if (!rec.partsDone) {
+        rec.partsDone = 0;
+        rec.sizeBytes = 0;
+      }
       await putDownload(rec);
       notifyChange();
     }
+    if (!rec.partsTotal) rec.partsTotal = rec.parts.length;
 
     if (!('caches' in window)) throw new Error('Cache API unavailable in this browser');
     const cache = await caches.open(videoCacheName(rec.folder));
@@ -664,6 +688,8 @@ async function runDownload(rec: SbDownload, ctrl: AbortController): Promise<void
     let done = rec.partsDone;
     let size = rec.sizeBytes;
     let failure: Error | null = null;
+    // fresh start: nothing can be cached yet — skip the per-part resume probe
+    const skipResumeMatch = rec.partsDone === 0;
 
     const grab = async (): Promise<void> => {
       for (;;) {
@@ -672,7 +698,7 @@ async function runDownload(rec: SbDownload, ctrl: AbortController): Promise<void
         if (i >= rec.parts.length) return;
         const partUrl = rec.parts[i];
         try {
-          const hit = await cache.match(partUrl); // resume: keep already-cached parts
+          const hit = skipResumeMatch ? null : await cache.match(partUrl); // resume: keep already-cached parts
           if (hit) {
             size += Number(hit.headers.get('content-length') || 0);
           } else {
@@ -714,6 +740,7 @@ async function runDownload(rec: SbDownload, ctrl: AbortController): Promise<void
 
     rec.partsDone = rec.parts.length;
     rec.sizeBytes = size;
+    rec.partsTotal = rec.parts.length;
     rec.status = 'done';
     rec.error = undefined;
     await putDownload(rec);

@@ -1556,16 +1556,16 @@ function PlayerInner() {
                     <span className="row-icon"><i className="fas fa-pause"></i></span>
                     <span className="dl-main">
                       <span className="dl-line">
-                        <span>Downloading… {dlRecord && dlRecord.parts.length > 0 ? Math.round((dlRecord.partsDone / dlRecord.parts.length) * 100) : 0}%</span>
+                        <span>Downloading… {dlRecord && (dlRecord.partsTotal || dlRecord.parts.length) > 0 ? Math.round((dlRecord.partsDone / (dlRecord.partsTotal || dlRecord.parts.length)) * 100) : 0}%</span>
                         <span className="dl-size">{formatBytes(dlRecord?.sizeBytes || 0)}</span>
                       </span>
                       <span className="dl-bar">
                         <span
                           className="dl-bar-fill"
-                          style={{ width: dlRecord && dlRecord.parts.length > 0 ? `${Math.round((dlRecord.partsDone / dlRecord.parts.length) * 100)}%` : '0%' }}
+                          style={{ width: dlRecord && (dlRecord.partsTotal || dlRecord.parts.length) > 0 ? `${Math.round((dlRecord.partsDone / (dlRecord.partsTotal || dlRecord.parts.length)) * 100)}%` : '0%' }}
                         ></span>
                       </span>
-                      <span className="dl-sub">{dlRecord ? `${dlRecord.partsDone}/${dlRecord.parts.length} parts · tap to pause` : ''}</span>
+                      <span className="dl-sub">{dlRecord ? `${dlRecord.partsDone}/${dlRecord.partsTotal || dlRecord.parts.length} parts · tap to pause` : ''}</span>
                     </span>
                   </div>
                 ) : dlRecord && dlRecord.status === 'paused' ? (
@@ -1577,10 +1577,10 @@ function PlayerInner() {
                         <span className="dl-bar">
                           <span
                             className="dl-bar-fill paused"
-                            style={{ width: dlRecord.parts.length > 0 ? `${Math.round((dlRecord.partsDone / dlRecord.parts.length) * 100)}%` : '0%' }}
+                            style={{ width: (dlRecord.partsTotal || dlRecord.parts.length) > 0 ? `${Math.round((dlRecord.partsDone / (dlRecord.partsTotal || dlRecord.parts.length)) * 100)}%` : '0%' }}
                           ></span>
                         </span>
-                        <span className="dl-sub">{dlRecord.partsDone}/{dlRecord.parts.length} parts · tap to resume</span>
+                        <span className="dl-sub">{dlRecord.partsDone}/{dlRecord.partsTotal || dlRecord.parts.length} parts · tap to resume</span>
                       </span>
                     </div>
                   </>

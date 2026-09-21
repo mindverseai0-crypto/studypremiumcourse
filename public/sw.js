@@ -70,11 +70,18 @@ function videoFolder(url) {
 }
 
 const MEDIA_EXT = /\.(m3u8|mpd|ts|m4s|mp4|m4a|m4v|webm|aac|key|cmfv|cmfa)$/i;
+/** Segment files — NEVER loose-scanned (an O(n) cache.keys() walk per missed
+ * segment serializes the SW thread and stalls active downloads at O(n²)).
+ * Segments are always stored byte-identical by the downloader, so the exact
+ * match covers offline playback; re-signed-URL playback only needs the loose
+ * scan for playlists/keys/manifests. */
+const SEGMENT_EXT = /\.(ts|m4s|mp4|m4a|m4v|webm|aac|cmfv|cmfa)$/i;
 
-/** Exact match first, then match ignoring the query string. */
-async function matchLoose(cache, request) {
+/** Exact match first, then (unless `skipLoose`) match ignoring the query. */
+async function matchLoose(cache, request, skipLoose = false) {
   const exact = await cache.match(request);
   if (exact) return exact;
+  if (skipLoose) return null;
   let path;
   try {
     path = new URL(request.url).pathname;
@@ -122,7 +129,8 @@ self.addEventListener('fetch', (event) => {
           return fetch(req);
         }
         const cache = await caches.open(name);
-        const hit = await matchLoose(cache, req);
+        const isSegment = SEGMENT_EXT.test(url.pathname);
+        const hit = await matchLoose(cache, req, isSegment);
         if (hit) {
           const headers = new Headers(hit.headers);
           headers.set('X-SB-Offline', 'hit');
@@ -147,7 +155,8 @@ self.addEventListener('fetch', (event) => {
         const names = (await caches.keys()).filter((n) => n.startsWith('sb-video-'));
         for (const name of names) {
           const cache = await caches.open(name);
-          const hit = await matchLoose(cache, req);
+          const isSegment = SEGMENT_EXT.test(url.pathname);
+          const hit = await matchLoose(cache, req, isSegment);
           if (hit) {
             const headers = new Headers(hit.headers);
             headers.set('X-SB-Offline', 'hit');

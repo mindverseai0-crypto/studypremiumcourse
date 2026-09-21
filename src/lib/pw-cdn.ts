@@ -45,9 +45,9 @@ export function pwProxyOrigin(): string {
 
 export type UpstreamMode = 'delta' | 'pearl' | 'direct';
 
-/** First lane to try — env `PW_UPSTREAM_MODE`, default `delta`. */
+/** First lane to try — env `PW_UPSTREAM_MODE`, default `pearl`. */
 export function upstreamMode(): UpstreamMode {
-  const v = (process.env.PW_UPSTREAM_MODE || 'delta').toLowerCase().trim();
+  const v = (process.env.PW_UPSTREAM_MODE || 'pearl').toLowerCase().trim();
   return v === 'pearl' || v === 'direct' ? (v as UpstreamMode) : 'delta';
 }
 
@@ -56,10 +56,14 @@ export function deltaPlayUrl(): string {
   return (process.env.PW_DELTA_PLAY_API || 'https://apiserver.deltastudy.fun/api/pi/play').trim();
 }
 
-/** Full lane order: configured mode first, then the remaining ones. */
+/**
+ * Full lane order: configured mode first, then the remaining ones by measured
+ * speed (pearl ≈0.2s/seg → direct ≈0.3-0.5s/seg → delta ≈1.7s/seg; delta also
+ * burned a wasted 403 round-trip per segment when the query was escaped).
+ */
 function laneChain(): UpstreamMode[] {
   const first = upstreamMode();
-  const rest: UpstreamMode[] = (['delta', 'pearl', 'direct'] as UpstreamMode[]).filter((m) => m !== first);
+  const rest: UpstreamMode[] = (['pearl', 'direct', 'delta'] as UpstreamMode[]).filter((m) => m !== first);
   return [first, ...rest];
 }
 
@@ -92,7 +96,12 @@ export async function fetchSignedAsset(
   signedQuery: string,
   opts: FetchSignedOptions = {},
 ): Promise<Response> {
-  const query = signedQuery.startsWith('?') ? signedQuery : signedQuery ? `?${signedQuery}` : '';
+  let query = signedQuery.startsWith('?') ? signedQuery : signedQuery ? `?${signedQuery}` : '';
+  // CloudFront validates the Signature value byte-for-byte — the signer's
+  // alphabet uses literal `~`, so any %7E escaping picked up along the
+  // URL/path chain MUST be unescaped or the direct lane 403s (pearl decodes
+  // server-side and tolerates both, but we normalize once for all lanes).
+  if (query.includes('%7E')) query = query.replace(/%7E/g, '~');
   const lanes = laneChain();
   let last: Response | null = null;
   let lastErr: unknown = null;
