@@ -684,3 +684,19 @@ Stage Summary:
 - Hard external limits (verified, not fixable client-side): Pallycon FairPlay/Widevine lectures cannot be decrypted in browsers without PW's license server (their key endpoint is unimplemented — the whole public ecosystem including ai.studio's own site cannot play them); their proxy serves ONLY drm media-N folders — non-drm folders of gated batches 403 upstream
 - The wiring is future-proof: if ai.studio fixes key delivery or adds non-drm folder access, affected lectures play with ZERO code changes; if the owner pastes any folder signature, the signed-lane branch takes over automatically (offline downloads + ClearKey)
 - Content-node videoDetails._id now carries the real video doc id — future resolvers can always address the actual video from the lecture list
+---
+Task ID: restore-local-state-10
+Agent: Z.ai Code (main)
+Task: Fix build error "Module not found: Can't resolve '@/lib/local-state'" (studybison-app.tsx:24) — TENTH sandbox revert loss
+
+Work Log:
+- Same casualty pattern as restores 2-9: snapshot revert deleted ONLY src/lib/local-state.ts; verified all other surfaces survived this time INCLUDING the newest live-playback-fix + nextstudy-fallback artifacts (src/lib/nextstudy.ts, /api/next/[...path], /api/live/[...path] per-distribution relay, signature-store live entries, /api/data nextStudyFallback wiring, FA vendor assets, sw.js v3)
+- Rebuilt byte-for-byte from the restore-local-state-3/4/5/7/8 hardened spec in one paste (module-level stable subscribe/getSnapshot/getServerSnapshot; cachedList raw-string memo MEMO_CAP 64 LRU; EMPTY_LIST SSR; per-key custom events + storage event incl. e.key===null; idempotent enroll/unenroll; toggleWatched→boolean; addXP self-contained WAAPI toast with translateX(-50%) in all keyframes + 2600ms fallback timer); keys pw_enrolled_batches/pw_watched_videos/pw_xp unchanged
+- bun run lint clean; dev hot-recovered without restart (500 → Compiled 180ms → GET / 200)
+- E2E (agent-browser, fresh profile): home 21 cards + chip "0 XP" + zero page errors/console noise; Enroll Now (Arjuna modal) → pw_enrolled_batches=["698ad3519549b300a5e1cc6a"] + button flips to Study This Batch; Study Dashboard hydrates dropdown + Today's Classes + subjects; Physics By Rajwant Singh Sir → CH-07 Parakram Solution 6 video rows; toggle ON → .active + watched written + pw_xp=10 + toast "+10 XP · Watched Video" + chip "20 XP" after OFF→ON (no double-award on OFF, XP stays 10); reload → chip hydrates "20 XP"; tab2 sets pw_xp=77 → tab1 chip live "77 XP" via storage event; state reset (xp=0, watched=[], Arjuna enrollment kept)
+- Post-restore smoke of the previous session's fixes (both survived, zero code changes needed): /api/next/api/stream.m3u8 (user's EXACT example URL params) → 200 Bento4 master with all URIs rewritten same-origin (2nd call 303ms = upstream memo working); /api/live/h/<dist>/index.m3u8 without signature → 403 (signature gate intact); dev.log all 200s
+
+Stage Summary:
+- Tenth restore complete — the worklog spec remains the single recovery source and again produced a verified-identical module in one paste; module still not git-committed, future reverts stay a one-step paste
+- IMPORTANT correction to prior session continuity: worklog confirms live-playback-fix AND nextstudy-fallback were COMPLETED in the prior session (entries above) — the "live classes not playing" + "use this API" tasks are DONE, not pending; this revert only cost local-state.ts
+- Full gold path re-verified post-restore with zero errors; test state left at xp=0/watched=[]/enrolled=[Arjuna JEE 2027]
