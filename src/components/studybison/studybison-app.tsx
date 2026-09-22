@@ -8,7 +8,7 @@
 // notes & DPP PDFs, tests, live schedule).
 // ============================================================================
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   api,
   fetchCatalog,
@@ -46,6 +46,48 @@ interface DppMeta {
 }
 
 const DEFAULT_THUMB = 'https://store.pw.live/footer-logo.svg';
+
+// --------------------------------------------------------------------------
+// Animated verified badge (Telegram-style: periodic diagonal shine sweep +
+// springy scale pulse). variant 'gold' = premium golden, 'blue' = Telegram
+// blue. Pure inline SVG + CSS (globals.css) — no extra deps.
+// --------------------------------------------------------------------------
+function VerifiedTick({ variant }: { variant: 'gold' | 'blue' }) {
+  const gid = `sbTickGrad-${useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
+  return (
+    <span className={`sb-tick ${variant}`} role="img" aria-label="Verified">
+      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+        <defs>
+          <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+            {variant === 'gold' ? (
+              <>
+                <stop offset="0%" stopColor="#FFE680" />
+                <stop offset="45%" stopColor="#FFC93C" />
+                <stop offset="100%" stopColor="#E8A200" />
+              </>
+            ) : (
+              <>
+                <stop offset="0%" stopColor="#4FC3F7" />
+                <stop offset="50%" stopColor="#2AABEE" />
+                <stop offset="100%" stopColor="#1E88E5" />
+              </>
+            )}
+          </linearGradient>
+        </defs>
+        <circle cx="12" cy="12" r="11" fill={`url(#${gid})`} />
+        <path
+          d="M6.8 12.6l3.5 3.6 6.9-7.4"
+          fill="none"
+          stroke="#fff"
+          strokeWidth="2.7"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <span className="glare" aria-hidden="true"></span>
+    </span>
+  );
+}
 
 export default function StudyBisonApp() {
   // ---------------- global nav ----------------
@@ -678,8 +720,12 @@ export default function StudyBisonApp() {
         </div>
         <div id="dev-credit" style={{ marginTop: 'auto', padding: 24, textAlign: 'center', borderTop: '1px solid var(--sb-border-color)', background: 'rgba(0,0,0,0.02)' }}>
           <div style={{ fontWeight: 700, fontSize: '0.95rem', color: 'var(--sb-text-muted)', letterSpacing: '0.5px' }}>
-            <i className="fas fa-code" style={{ color: 'var(--sb-text-dark)' }}></i> Developed by <br />
-            <span style={{ color: 'var(--sb-primary)', fontWeight: 800, fontSize: '1.2rem', textTransform: 'uppercase', display: 'inline-block', marginTop: 5 }}>Nishant</span>
+            <i className="fas fa-code" style={{ color: 'var(--sb-text-dark)' }}></i> Designed and Developed By
+          </div>
+          <div className="sb-footer-names" style={{ marginTop: 8 }}>
+            <span className="sb-creditor nishant">Nishant <VerifiedTick variant="gold" /></span>
+            <span className="sb-footer-and">and</span>
+            <span className="sb-creditor avi">Avi_23 <VerifiedTick variant="blue" /></span>
           </div>
         </div>
       </div>
@@ -1189,6 +1235,20 @@ export default function StudyBisonApp() {
           </div>
         </div>
       </div>
+
+      {/* ================= FOOTER ================= */}
+      <footer className="sb-footer" role="contentinfo">
+        <div className="sb-footer-line">
+          <span className="sb-footer-label">
+            <i className="fas fa-code" aria-hidden="true"></i> Designed and Developed By
+          </span>
+          <span className="sb-footer-names">
+            <span className="sb-creditor nishant">Nishant <VerifiedTick variant="gold" /></span>
+            <span className="sb-footer-and">and</span>
+            <span className="sb-creditor avi">Avi_23 <VerifiedTick variant="blue" /></span>
+          </span>
+        </div>
+      </footer>
 
       {/* ================= BATCH INFO MODAL ================= */}
       <div className={`modal-overlay ${batchInfoOpen ? 'active' : ''}`} id="batch-info-modal" onClick={(e) => { if (e.target === e.currentTarget) setBatchInfoOpen(false); }}>

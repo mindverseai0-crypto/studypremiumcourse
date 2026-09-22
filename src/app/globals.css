@@ -449,3 +449,91 @@
   animation: sbSlideUp 0.3s ease;
 }
 .sb-app .online-chip i { color: #22c55e; }
+
+/* =========================================
+   FOOTER — Designed & Developed credit with
+   Telegram-style animated verified ticks
+   ========================================= */
+.sb-app .sb-footer {
+  margin-top: auto; /* sticky bottom: pushed down by flex:1 #app-container, anchored when content is short */
+  padding: 22px 24px calc(22px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--sb-border-color);
+  background: var(--sb-bg-card);
+  display: flex;
+  justify-content: center;
+}
+.sb-app .sb-footer-line { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.sb-app .sb-footer-label {
+  font-weight: 700;
+  font-size: 0.92rem;
+  color: var(--sb-text-muted);
+  letter-spacing: 0.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.sb-app .sb-footer-names { display: inline-flex; align-items: center; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.sb-app .sb-creditor {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-weight: 800;
+  font-size: 1.1rem;
+  letter-spacing: 0.3px;
+}
+.sb-app .sb-creditor.nishant { color: var(--sb-primary); }
+.sb-app .sb-creditor.avi { color: #229ED9; }
+.sb-app .sb-footer-and { color: var(--sb-text-muted); font-weight: 600; font-size: 0.95rem; }
+
+/* --- verified tick badge (gold / blue) --- */
+.sb-app .sb-tick {
+  position: relative;
+  display: inline-block;
+  width: 1.15em;
+  height: 1.15em;
+  border-radius: 50%;
+  overflow: hidden; /* clips the glare sweep to the badge circle */
+  transform-origin: 50% 50%;
+  animation: sbTickPulse 3.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  vertical-align: -0.18em;
+  flex-shrink: 0;
+}
+.sb-app .sb-tick svg { display: block; width: 100%; height: 100%; }
+.sb-app .sb-tick.gold { filter: drop-shadow(0 1px 3px rgba(232, 162, 0, 0.45)); }
+.sb-app .sb-tick.gold svg { animation: sbGoldGlow 3.4s ease-in-out infinite; }
+.sb-app .sb-tick.blue { filter: drop-shadow(0 1px 3px rgba(42, 171, 238, 0.45)); }
+.sb-app .sb-tick .glare {
+  position: absolute;
+  top: -15%;
+  bottom: -15%;
+  left: 0;
+  width: 48%;
+  background: linear-gradient(100deg, rgba(255, 255, 255, 0) 0%, rgba(255, 255, 255, 0.9) 50%, rgba(255, 255, 255, 0) 100%);
+  transform: translateX(-220%) skewX(-18deg);
+  animation: sbTickShine 3.4s ease-in-out infinite;
+  pointer-events: none;
+}
+
+/* shine sweeps ~1.5s then idles the rest of the cycle (Telegram cadence) */
+@keyframes sbTickShine {
+  0% { transform: translateX(-220%) skewX(-18deg); }
+  45%, 100% { transform: translateX(340%) skewX(-18deg); }
+}
+/* springy pulse peaking exactly as the shine crosses mid-badge */
+@keyframes sbTickPulse {
+  0%, 38%, 78%, 100% { transform: scale(1); }
+  47% { transform: scale(1.14); }
+  60% { transform: scale(0.98); }
+}
+/* golden premium glow breathe, synced with the pulse */
+@keyframes sbGoldGlow {
+  0%, 38%, 78%, 100% { filter: drop-shadow(0 0 2px rgba(255, 200, 60, 0.35)); }
+  47% { filter: drop-shadow(0 0 7px rgba(255, 200, 60, 0.85)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sb-app .sb-tick,
+  .sb-app .sb-tick svg,
+  .sb-app .sb-tick .glare { animation: none; }
+  .sb-app .sb-tick .glare { display: none; }
+}

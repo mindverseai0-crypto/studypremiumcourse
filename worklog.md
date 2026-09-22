@@ -700,3 +700,21 @@ Stage Summary:
 - Tenth restore complete — the worklog spec remains the single recovery source and again produced a verified-identical module in one paste; module still not git-committed, future reverts stay a one-step paste
 - IMPORTANT correction to prior session continuity: worklog confirms live-playback-fix AND nextstudy-fallback were COMPLETED in the prior session (entries above) — the "live classes not playing" + "use this API" tasks are DONE, not pending; this revert only cost local-state.ts
 - Full gold path re-verified post-restore with zero errors; test state left at xp=0/watched=[]/enrolled=[Arjuna JEE 2027]
+---
+Task ID: footer-credit-ticks
+Agent: Z.ai Code (main)
+Task: Add footer credit "Designed and Developed By Nishant and Avi_23" with golden premium tick on Nishant + blue premium tick on Avi_23, animated like Telegram verified ticks
+
+Work Log:
+- New page-level <footer class="sb-footer"> added at the end of the StudyBisonApp fragment (direct flex child of body.sb-app, after #app-container) — sticky-bottom guaranteed by existing .sb-app flex column + #app-container flex:1 + footer margin-top:auto; padding includes env(safe-area-inset-bottom); label "</> Designed and Developed By" + names row "Nishant and Avi_23"
+- New VerifiedTick component (studybison-app.tsx): inline SVG badge — circle with per-instance linearGradient (React useId sanitized for the gradient id) + white round-cap check path; variant gold (#FFE680→#FFC93C→#E8A200) for Nishant, blue (#4FC3F7→#2AABEE→#1E88E5, Telegram blue) for Avi_23; .glare span overlaid, clipped to the circle via border-radius:50% + overflow:hidden
+- Telegram-style animation (globals.css): sbTickShine — diagonal skewX(-18deg) white glare sweeps across in ~1.5s then idles the rest of the 3.4s cycle; sbTickPulse — springy scale 1→1.14→0.98→1 peaking exactly as the shine crosses mid-badge; sbGoldGlow — gold drop-shadow breathe synced with the pulse; static color drop-shadows per variant; prefers-reduced-motion disables all three + hides glare
+- Sidebar dev-credit updated to the same wording + both ticks (was "Developed by Nishant" alone); names colored to echo their badges (Nishant var(--sb-primary) amber, Avi_23 #229ED9)
+- BUGFIX during verify: Turbopack did NOT pick up the externally-appended globals.css (stale chunk after touch AND after plain restart) — killed server, rm -rf .next, restarted → fresh bundle contains the rules (8 sb-tick rule matches); lesson: after bash-appended CSS, if rules missing in served chunk, nuke .next
+- bun run lint clean
+- E2E (agent-browser): footer text exactly "Designed and Developed By Nishant and Avi_23"; 1 gold + 1 blue tick in footer, 2 in sidebar; computed styles confirm sbTickPulse 3.4s + sbTickShine glare + gold drop-shadow; live pulse measured (badge width oscillates 19.8→23px over one cycle); long home page pushes footer to document bottom (footerBottom=scrollH=5512), Downloads view footer flush at viewport bottom (658=658) with zero overlap; screenshot confirms golden Nishant + amber badge, blue Avi_23 + blue badge, FA </> glyph rendering; zero console/page errors; browser closed
+
+Stage Summary:
+- Footer credit shipped with animated Telegram-style verified ticks — golden premium for Nishant, Telegram blue for Avi_23 — sticky to the viewport bottom on short views and naturally pushed on long ones, safe-area aware, reduced-motion accessible, zero new deps (inline SVG + CSS keyframes only)
+- Sidebar credit now matches the footer wording and badges for consistency
+- Infra note: Turbopack ignored an external `cat >>` append to globals.css even after touch + server restart; `rm -rf .next` + restart was required to serve the new CSS
