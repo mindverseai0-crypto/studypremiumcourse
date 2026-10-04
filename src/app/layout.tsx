@@ -10,9 +10,9 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Study Bison 🦬",
+  title: "Study Monkey",
   description:
-    "Study Bison — India's most affordable learning app. Explore batches for JEE, NEET, Boards, Commerce & more.",
+    "Study Monkey — India's most affordable learning app. Explore batches for JEE, NEET, Boards, Commerce & more.",
   icons: {
     icon: [
       // versioned to defeat stale browser favicon caches
@@ -21,10 +21,10 @@ export const metadata: Metadata = {
     apple: "/logo-bison.png?v=2",
   },
   manifest: "/manifest.webmanifest",
-  applicationName: "Study Bison",
+  applicationName: "Study Monkey",
   appleWebApp: {
     capable: true,
-    title: "Study Bison",
+    title: "Study Monkey",
     statusBarStyle: "black-translucent",
   },
 };

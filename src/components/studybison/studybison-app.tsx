@@ -93,6 +93,9 @@ export default function StudyBisonApp() {
   // ---------------- global nav ----------------
   const [view, setView] = useState<ViewId>('home-view');
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  
+  // ---------------- community popup ----------------
+  const [communityPopupOpen, setCommunityPopupOpen] = useState(false);
 
   // ---------------- home / catalog ----------------
   const [batches, setBatches] = useState<BatchCatalogItem[]>([]);
@@ -188,6 +191,19 @@ export default function StudyBisonApp() {
     const unsub = subscribeDownloads(refreshDownloads);
     return () => unsub();
   }, [refreshDownloads]);
+  
+  // ==================================================================
+  // STUDY MONKEY COMMUNITY POPUP
+  // Opens 1.6 seconds after the website is opened.
+  // It appears again on every new page load.
+  // ==================================================================
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setCommunityPopupOpen(true);
+    }, 1600);
+
+    return () => window.clearTimeout(timer);
+  }, []);
 
   // manifest shortcut / deep link → open the Downloads view directly
   useEffect(() => {
@@ -694,13 +710,331 @@ export default function StudyBisonApp() {
 
   return (
     <>
+      {/* ================================================================
+          STUDY MONKEY COMMUNITY POPUP
+          Frontend only — no backend/API/data changes
+          ================================================================ */}
+      {communityPopupOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="study-monkey-community-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setCommunityPopupOpen(false);
+            }
+          }}
+          style={{
+            position: 'fixed',
+            inset: 0,
+            zIndex: 99999,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '20px',
+            background: 'rgba(0, 0, 0, 0.68)',
+            backdropFilter: 'blur(5px)',
+            WebkitBackdropFilter: 'blur(5px)',
+            animation: 'studyMonkeyPopupFadeIn 0.25s ease-out',
+          }}
+        >
+          <div
+            style={{
+              position: 'relative',
+              width: '100%',
+              maxWidth: '430px',
+              borderRadius: '24px',
+              overflow: 'hidden',
+              background: '#ffffff',
+              boxShadow: '0 25px 70px rgba(0, 0, 0, 0.30)',
+              animation: 'studyMonkeyPopupScaleIn 0.3s ease-out',
+            }}
+          >
+            {/* Close button */}
+            <button
+              type="button"
+              onClick={() => setCommunityPopupOpen(false)}
+              aria-label="Close community popup"
+              style={{
+                position: 'absolute',
+                top: '14px',
+                right: '14px',
+                zIndex: 2,
+                width: '38px',
+                height: '38px',
+                border: 'none',
+                borderRadius: '50%',
+                background: 'rgba(255, 255, 255, 0.95)',
+                color: '#374151',
+                fontSize: '18px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                boxShadow: '0 4px 15px rgba(0,0,0,0.15)',
+              }}
+            >
+              <i className="fas fa-times"></i>
+            </button>
+
+            {/* Popup header */}
+            <div
+              style={{
+                padding: '32px 24px 26px',
+                textAlign: 'center',
+                background:
+                  'linear-gradient(135deg, #5b4bdb 0%, #7c3aed 55%, #2563eb 100%)',
+                color: '#ffffff',
+              }}
+            >
+              <div
+                style={{
+                  width: '72px',
+                  height: '72px',
+                  margin: '0 auto 16px',
+                  borderRadius: '20px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  background: 'rgba(255,255,255,0.16)',
+                  border: '1px solid rgba(255,255,255,0.28)',
+                  boxShadow: '0 10px 30px rgba(0,0,0,0.18)',
+                }}
+              >
+                <i
+                  className="fas fa-users"
+                  style={{
+                    fontSize: '30px',
+                    color: '#ffffff',
+                  }}
+                ></i>
+              </div>
+
+              <h2
+                id="study-monkey-community-title"
+                style={{
+                  margin: 0,
+                  fontSize: '1.55rem',
+                  fontWeight: 800,
+                  letterSpacing: '-0.3px',
+                }}
+              >
+                Study Monkey Community
+              </h2>
+
+              <p
+                style={{
+                  margin: '9px 0 0',
+                  fontSize: '0.92rem',
+                  lineHeight: 1.5,
+                  color: 'rgba(255,255,255,0.88)',
+                }}
+              >
+                Join our official communities for updates, announcements,
+                study materials and important notifications.
+              </p>
+            </div>
+
+            {/* Community buttons */}
+            <div
+              style={{
+                padding: '24px',
+                background: '#ffffff',
+              }}
+            >
+              {/* WhatsApp */}
+              <a
+                href="https://whatsapp.com/channel/0029VbDHV7S4Y9lpLpzzAz3k"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '14px',
+                  width: '100%',
+                  padding: '14px 16px',
+                  marginBottom: '12px',
+                  boxSizing: 'border-box',
+                  borderRadius: '15px',
+                  textDecoration: 'none',
+                  background: '#25D366',
+                  color: '#ffffff',
+                  boxShadow: '0 7px 18px rgba(37, 211, 102, 0.22)',
+                  transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+                }}
+              >
+                <span
+                  style={{
+                    width: '42px',
+                    height: '42px',
+                    flexShrink: 0,
+                    borderRadius: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: 'rgba(255,255,255,0.18)',
+                  }}
+                >
+                  <i
+                    className="fab fa-whatsapp"
+                    style={{ fontSize: '23px' }}
+                  ></i>
+                </span>
+
+                <span style={{ flex: 1 }}>
+                  <strong
+                    style={{
+                      display: 'block',
+                      fontSize: '1rem',
+                      fontWeight: 800,
+                    }}
+                  >
+                    WhatsApp Channel
+                  </strong>
+
+                  <small
+                    style={{
+                      display: 'block',
+                      marginTop: '2px',
+                      opacity: 0.9,
+                    }}
+                  >
+                    Join our WhatsApp community
+                  </small>
+                </span>
+
+                <i
+                  className="fas fa-arrow-up-right-from-square"
+                  style={{ fontSize: '14px' }}
+                ></i>
+              </a>
+
+              {/* Telegram */}
+              <a
+                href="https://t.me/+RdKXy-VsuAIzMDVl"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '14px',
+                  width: '100%',
+                  padding: '14px 16px',
+                  boxSizing: 'border-box',
+                  borderRadius: '15px',
+                  textDecoration: 'none',
+                  background: '#229ED9',
+                  color: '#ffffff',
+                  boxShadow: '0 7px 18px rgba(34, 158, 217, 0.22)',
+                  transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+                }}
+              >
+                <span
+                  style={{
+                    width: '42px',
+                    height: '42px',
+                    flexShrink: 0,
+                    borderRadius: '12px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    background: 'rgba(255,255,255,0.18)',
+                  }}
+                >
+                  <i
+                    className="fab fa-telegram-plane"
+                    style={{ fontSize: '23px' }}
+                  ></i>
+                </span>
+
+                <span style={{ flex: 1 }}>
+                  <strong
+                    style={{
+                      display: 'block',
+                      fontSize: '1rem',
+                      fontWeight: 800,
+                    }}
+                  >
+                    Telegram Channel
+                  </strong>
+
+                  <small
+                    style={{
+                      display: 'block',
+                      marginTop: '2px',
+                      opacity: 0.9,
+                    }}
+                  >
+                    Join our Telegram community
+                  </small>
+                </span>
+
+                <i
+                  className="fas fa-arrow-up-right-from-square"
+                  style={{ fontSize: '14px' }}
+                ></i>
+              </a>
+
+              {/* Maybe Later */}
+              <button
+                type="button"
+                onClick={() => setCommunityPopupOpen(false)}
+                style={{
+                  width: '100%',
+                  marginTop: '18px',
+                  padding: '10px',
+                  border: 'none',
+                  background: 'transparent',
+                  color: '#6b7280',
+                  fontSize: '0.9rem',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                Maybe Later
+              </button>
+            </div>
+          </div>
+
+          {/* Popup animation */}
+          <style>{`
+            @keyframes studyMonkeyPopupFadeIn {
+              from {
+                opacity: 0;
+              }
+              to {
+                opacity: 1;
+              }
+            }
+
+            @keyframes studyMonkeyPopupScaleIn {
+              from {
+                opacity: 0;
+                transform: scale(0.92) translateY(12px);
+              }
+              to {
+                opacity: 1;
+                transform: scale(1) translateY(0);
+              }
+            }
+
+            @media (max-width: 480px) {
+              .study-monkey-community-popup {
+                max-width: calc(100vw - 28px);
+              }
+            }
+          `}</style>
+        </div>
+      )}
+      
       {/* ================= SIDEBAR ================= */}
       <div className={`sidebar-overlay ${sidebarOpen ? 'active' : ''}`} onClick={() => setSidebarOpen(false)}></div>
       <div className={`sidebar ${sidebarOpen ? 'active' : ''}`}>
         <div className="sidebar-header">
           <div className="logo-area">
-            <img src="/logo-bison.png" alt="Study Bison logo" style={{ width: 38, height: 38, borderRadius: 11, objectFit: 'cover' }} />
-            <span className="logo-text">Study <span>Bison</span></span>
+            <img src="/logo-bison.png" alt="Study Monkey logo" style={{ width: 38, height: 38, borderRadius: 11, objectFit: 'cover' }} />
+            <span className="logo-text">Study <span>Monkey</span></span>
           </div>
           <button className="sheet-close" onClick={() => setSidebarOpen(false)} style={{ position: 'relative', top: 0, right: 0, width: 35, height: 35 }} aria-label="Close menu">
             <i className="fas fa-times"></i>
@@ -723,9 +1057,9 @@ export default function StudyBisonApp() {
             <i className="fas fa-code" style={{ color: 'var(--sb-text-dark)' }}></i> Designed and Developed By
           </div>
           <div className="sb-footer-names" style={{ marginTop: 8 }}>
-            <span className="sb-creditor nishant">Nishant <VerifiedTick variant="gold" /></span>
+            <span className="sb-creditor nishant">PRINCE <VerifiedTick variant="gold" /></span>
             <span className="sb-footer-and">and</span>
-            <span className="sb-creditor avi">Avi_23 <VerifiedTick variant="blue" /></span>
+            <span className="sb-creditor avi">VRIYANSHU <VerifiedTick variant="blue" /></span>
           </div>
         </div>
       </div>
@@ -737,8 +1071,8 @@ export default function StudyBisonApp() {
             <i className="fas fa-bars-staggered"></i>
           </button>
           <a className="logo-area" onClick={() => nav('home-view')} role="button" tabIndex={0}>
-            <img src="/logo-bison.png" alt="Study Bison logo" style={{ width: 38, height: 38, borderRadius: 11, objectFit: 'cover' }} />
-            <span className="logo-text">Study <span>Bison</span></span>
+            <img src="/logo-bison.png" alt="Study Monkey logo" style={{ width: 38, height: 38, borderRadius: 11, objectFit: 'cover' }} />
+            <span className="logo-text">Study <span>Monkey</span></span>
           </a>
         </div>
         <div className="d-flex align-items-center">
@@ -1243,9 +1577,9 @@ export default function StudyBisonApp() {
             <i className="fas fa-code" aria-hidden="true"></i> Designed and Developed By
           </span>
           <span className="sb-footer-names">
-            <span className="sb-creditor nishant">Nishant <VerifiedTick variant="gold" /></span>
+            <span className="sb-creditor nishant">PRINCE <VerifiedTick variant="gold" /></span>
             <span className="sb-footer-and">and</span>
-            <span className="sb-creditor avi">Avi_23 <VerifiedTick variant="blue" /></span>
+            <span className="sb-creditor avi">VRIYANSHU <VerifiedTick variant="blue" /></span>
           </span>
         </div>
       </footer>

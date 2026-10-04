@@ -59,7 +59,7 @@ function Logo({ size = 64 }: { size?: number }) {
   return (
     <img
       src="/logo-bison.png"
-      alt="Study Bison logo"
+      alt="Study Monkey logo"
       width={size}
       height={size}
       className="rounded-2xl shadow-lg"
@@ -88,7 +88,7 @@ function Splash() {
 
 const STEPS = [
   { icon: MousePointerClick, title: 'Tap "Get free access"', desc: 'We create your personal 24-hour key instantly.' },
-  { icon: ShieldCheck, title: 'Complete one short ad step', desc: 'A brief sponsor page keeps Study Bison free.' },
+  { icon: ShieldCheck, title: 'Complete one short ad step', desc: 'A brief sponsor page keeps Study Monkey free.' },
   { icon: BadgeCheck, title: 'You are back — activated', desc: 'Full access for 24 hours, bound to this browser.' },
 ];
 
@@ -278,7 +278,7 @@ function GateScreen() {
         </section>
 
         <p className="mt-6 text-center text-[11px] text-gray-500">
-          Keys are signed and expire automatically after 24 hours. Study Bison never stores your data.
+          Keys are signed and expire automatically after 24 hours. Study Monkey never stores your data.
         </p>
       </main>
     </div>

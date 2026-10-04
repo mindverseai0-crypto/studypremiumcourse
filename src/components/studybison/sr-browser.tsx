@@ -188,7 +188,7 @@ export default function SrBrowser() {
           </button>
         ) : null}
         <h4 style={{ margin: 0, fontWeight: 800 }}>
-          Study Ratna
+          Study Prince
           <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.5px', padding: '2px 6px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle' }}>SR LECTURES</span>
         </h4>
       </div>
@@ -198,10 +198,10 @@ export default function SrBrowser() {
           <input
             className="form-control rounded-pill"
             style={{ padding: '12px 20px', marginBottom: 16, minHeight: 44 }}
-            placeholder="Search Study Ratna batches…"
+            placeholder="Search Study Prince batches…"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search Study Ratna batches"
+            aria-label="Search Study Prince batches"
           />
           <div className="row g-3">
             {filteredBatches.map((b) => (

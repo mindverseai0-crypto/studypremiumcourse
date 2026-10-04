@@ -1087,7 +1087,7 @@ function PlayerInner() {
                 <i className="fas fa-arrow-left back-btn" onClick={goBack}></i>
                 <div className="video-title">
                   {title}
-                  <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.5px', padding: '2px 6px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle' }}>STUDY RATNA</span>
+                  <span style={{ background: '#ef4444', color: '#fff', fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.5px', padding: '2px 6px', borderRadius: 4, marginLeft: 8, verticalAlign: 'middle' }}>STUDY PRINCE</span>
                 </div>
               </div>
               <div className="top-icons">
