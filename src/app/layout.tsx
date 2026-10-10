@@ -10,21 +10,26 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Study Monkey",
+  title: {
+    default: "STUDY PREMIUM COURSE",
+    template: "%s | STUDY PREMIUM COURSE",
+  },
   description:
-    "Study Monkey — India's most affordable learning app. Explore batches for JEE, NEET, Boards, Commerce & more.",
+    "STUDY PREMIUM COURSE — Your premium learning platform. Explore courses, batches, study materials, and more.",
   icons: {
     icon: [
-      // versioned to defeat stale browser favicon caches
-      { url: "/logo-bison.png?v=2", type: "image/png" },
+      {
+        url: "/logo-bison.png?v=3",
+        type: "image/png",
+      },
     ],
-    apple: "/logo-bison.png?v=2",
+    apple: "/logo-bison.png?v=3",
   },
   manifest: "/manifest.webmanifest",
-  applicationName: "Study Monkey",
+  applicationName: "STUDY PREMIUM COURSE",
   appleWebApp: {
     capable: true,
-    title: "Study Monkey",
+    title: "STUDY PREMIUM COURSE",
     statusBarStyle: "black-translucent",
   },
 };
@@ -45,13 +50,14 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        {/* Font Awesome self-hosted (public/vendor/fontawesome) — identical
-            6.4.0 build the CDN served, but the service worker can cache it so
-            icons keep rendering offline instead of turning into tofu boxes */}
+        {/* Self-hosted Font Awesome — supports offline caching */}
         {/* eslint-disable-next-line @next/next/no-css-tags */}
-        <link href="/vendor/fontawesome/css/all.min.css" rel="stylesheet" />
+        <link
+          href="/vendor/fontawesome/css/all.min.css"
+          rel="stylesheet"
+        />
       </head>
-      <body className={`${inter.variable} sb-app antialiased`}>
+      <body className={`${inter.variable} antialiased`}>
         {children}
         <PWARegister />
       </body>

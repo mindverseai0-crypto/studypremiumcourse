@@ -59,7 +59,7 @@ function Logo({ size = 64 }: { size?: number }) {
   return (
     <img
       src="/logo-bison.png"
-      alt="Study Monkey logo"
+      alt="STUDY PREMIUM COURSE logo"
       width={size}
       height={size}
       className="rounded-2xl shadow-lg"
@@ -120,9 +120,9 @@ function GateScreen() {
           <Logo size={72} />
           <div>
             <div className="text-2xl font-extrabold tracking-tight text-white">
-              Study <span style={{ color: AMBER }}>Bison</span>
+              STUDY <span style={{ color: AMBER }}>PREMIUM COURSE</span>
             </div>
-            <div className="mt-1 text-sm text-gray-400">India&apos;s most affordable learning app</div>
+            <div className="mt-1 text-sm text-gray-400">Your premium learning platform</div>
           </div>
         </div>
 
@@ -278,7 +278,7 @@ function GateScreen() {
         </section>
 
         <p className="mt-6 text-center text-[11px] text-gray-500">
-          Keys are signed and expire automatically after 24 hours. Study Monkey never stores your data.
+          Keys are signed and expire automatically after 24 hours. STUDY PREMIUM COURSE never stores your data.
         </p>
       </main>
     </div>

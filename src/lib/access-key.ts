@@ -23,7 +23,7 @@ const SESSION_SECRET =
   "55890b0a2a0b51320ef130ed17f4f67317f86370fb3a39d07dc2603b3025f08e"; // fresh per project
 
 const SITE_URL =
-  process.env.ACCESS_KEY_SITE_URL || "https://your-public-domain.com";
+  process.env.ACCESS_KEY_SITE_URL || "https://studypremiumcourse.vercel.app";
 
 export const PENDING_COOKIE = "pending";
 export const SESSION_COOKIE = "sid";

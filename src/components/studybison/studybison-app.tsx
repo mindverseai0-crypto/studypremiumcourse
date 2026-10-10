@@ -193,7 +193,7 @@ export default function StudyBisonApp() {
   }, [refreshDownloads]);
   
   // ==================================================================
-  // STUDY MONKEY COMMUNITY POPUP
+  // STUDY PREMIUM COURSE COMMUNITY POPUP
   // Opens 1.6 seconds after the website is opened.
   // It appears again on every new page load.
   // ==================================================================
@@ -711,14 +711,14 @@ export default function StudyBisonApp() {
   return (
     <>
       {/* ================================================================
-          STUDY MONKEY COMMUNITY POPUP
+          STUDY PREMIUM COURSE COMMUNITY POPUP
           Frontend only — no backend/API/data changes
           ================================================================ */}
       {communityPopupOpen && (
         <div
           role="dialog"
           aria-modal="true"
-          aria-labelledby="study-monkey-community-title"
+          aria-labelledby="study-premium-course-community-title"
           onClick={(e) => {
             if (e.target === e.currentTarget) {
               setCommunityPopupOpen(false);
@@ -812,7 +812,7 @@ export default function StudyBisonApp() {
               </div>
 
               <h2
-                id="study-monkey-community-title"
+                id="study-premium-course-community-title"
                 style={{
                   margin: 0,
                   fontSize: '1.55rem',
@@ -820,7 +820,7 @@ export default function StudyBisonApp() {
                   letterSpacing: '-0.3px',
                 }}
               >
-                Study Monkey Community
+                STUDY PREMIUM COURSE Community
               </h2>
 
               <p
@@ -912,7 +912,7 @@ export default function StudyBisonApp() {
 
               {/* Telegram */}
               <a
-                href="https://t.me/+RdKXy-VsuAIzMDVl"
+                href="https://t.me/vriyanshu_editz"
                 target="_blank"
                 rel="noopener noreferrer"
                 style={{
@@ -1033,8 +1033,8 @@ export default function StudyBisonApp() {
       <div className={`sidebar ${sidebarOpen ? 'active' : ''}`}>
         <div className="sidebar-header">
           <div className="logo-area">
-            <img src="/logo-bison.png" alt="Study Monkey logo" style={{ width: 38, height: 38, borderRadius: 11, objectFit: 'cover' }} />
-            <span className="logo-text">Study <span>Monkey</span></span>
+            <img src="/logo-bison.png" alt="STUDY PREMIUM COURSE logo" style={{ width: 38, height: 38, borderRadius: 11, objectFit: 'cover' }} />
+            <span className="logo-text">STUDY <span>PREMIUM COURSE</span></span>
           </div>
           <button className="sheet-close" onClick={() => setSidebarOpen(false)} style={{ position: 'relative', top: 0, right: 0, width: 35, height: 35 }} aria-label="Close menu">
             <i className="fas fa-times"></i>
@@ -1071,8 +1071,8 @@ export default function StudyBisonApp() {
             <i className="fas fa-bars-staggered"></i>
           </button>
           <a className="logo-area" onClick={() => nav('home-view')} role="button" tabIndex={0}>
-            <img src="/logo-bison.png" alt="Study Monkey logo" style={{ width: 38, height: 38, borderRadius: 11, objectFit: 'cover' }} />
-            <span className="logo-text">Study <span>Monkey</span></span>
+            <img src="/logo-bison.png" alt="STUDY PREMIUM COURSE logo" style={{ width: 38, height: 38, borderRadius: 11, objectFit: 'cover' }} />
+            <span className="logo-text">STUDY <span>PREMIUM COURSE</span></span>
           </a>
         </div>
         <div className="d-flex align-items-center">
